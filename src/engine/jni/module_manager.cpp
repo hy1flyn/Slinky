@@ -2,7 +2,7 @@
 // cflags: /Ob1 /clang:-fno-slp-vectorize -mllvm -switch-to-lookup=false
 #include "slinky/engine.h"
 #include "slinky/jcall.h"
-extern "C" void slinky_logf(const char *fmt, ...);
+extern "C" char gui_module_descriptor[];   // the client window itself, kept out of the module card list
 typedef void (*Handler)(void *event);
 struct Module;
 struct Reg { Module **list; unsigned long long n; };
@@ -14,6 +14,24 @@ struct Mgr {
     Module **dis_list; unsigned long long dis_count;  // +0x2f8 pending disables
     void (*set308)(void *mod, int v);   // +0x308
 };
+// The manager lives in a fixed 784-byte block of the data image, so the deferred enable
+// batch cannot be stored inside it; it is file-local instead.
+static Module *deferred_enable[0x43];
+static unsigned long long deferred_enable_n;
+// Same for disables: a batch queued on the main menu still owes its release_owner call.
+static Module *deferred_disable[0x43];
+static unsigned long long deferred_disable_n;
+// Merge a batch into the deferred queue instead of replacing it. Loading two profiles from the
+// main menu queues two batches in consecutive frames, and the second used to overwrite the first:
+// those modules never got their toggle notification and, for disables, never gave the hotbar back.
+// Modules already queued keep their position, so a module that was enabled and then disabled again
+// before a world exists ends up with the notification that matches its final state.
+static void defer_append(Module **queue, unsigned long long *count, Module *mod) {
+    for (unsigned long long i = 0; i < *count; i++)
+        if (queue[i] == mod) return;
+    if (*count >= 0x43) return;
+    queue[(*count)++] = mod;
+}
 struct HSlot { Handler f; void *x; };
 struct Module { char padding_00[0x10]; unsigned cat; unsigned char enabled; char padding_15[0x33]; HSlot h[27]; };
 // dispatch: call every handler registered for the event's type (first dword of the event)
@@ -184,41 +202,91 @@ extern "C" void apply_module_toggles(HCtx *ctx) {
     // the main menu, where Minecraft.thePlayer/theWorld are NULL. Keeping the queue until the first frame
     // that has both is what the tick path already does (tick_modules has the same check); applying it
     // against a NULL player faulted in jni_fast_GetFloatField.
-    if (!ctx->world || !ctx->player) return;
+    // The enabled flags and the handler tables are pure bookkeeping: they never touch a game
+    // object, so they are applied unconditionally. That matters on the main menu, where the
+    // HUD has to draw with no world and no player: the render lists were left empty because
+    // this function returned early, so is_event_handled() reported "nobody listens" for the
+    // 3D and 2D events and render_world_events() skipped both passes entirely.
+    // Only the toggle notifications below reach into the game (Block In's enable reads the
+    // local player's rotation), and those stay deferred until a world and a player exist.
+    bool game_ready = ctx->world && ctx->player;
     if (manager->en_count) {
         unsigned long long mask = 0;
-        for (unsigned long long i = 0; i != manager->en_count; i++) {
+        unsigned long long n = manager->en_count;
+        for (unsigned long long i = 0; i != n; i++) {
             Module *mod = manager->en_list[i];
             mod->enabled = 1;
             mask |= handler_mask(mod);
         }
         rebuild(manager, mask);
-        slinky_logf("toggles: enable n=%llu mask=%llx first=%s", manager->en_count, mask, *(const char **)manager->en_list[0]);
-        for (unsigned long long i = 0; i < manager->en_count; i++) {
-            ToggleEvent e = {5, ctx, manager->en_list[i], 1, {}};
+        if (game_ready) {
+            for (unsigned long long i = 0; i < n; i++) {
+                ToggleEvent e = {5, ctx, manager->en_list[i], 1, {}};
+                Handler *h = ctx->module_manager->lists[5];
+                for (Handler f = *h; f; f = *++h) f(&e);
+            }
+            manager->en_count = 0;
+        } else {
+            // No world yet: the modules are on and their handlers are wired, but the
+            // toggle notifications have to wait (they read game objects). Remember the
+            // batch so it is announced on the first frame that has a player and a world.
+            for (unsigned long long i = 0; i < n; i++) defer_append(deferred_enable, &deferred_enable_n, manager->en_list[i]);
+            manager->en_count = 0;
+        }
+        manager = ctx->module_manager;
+    } else if (game_ready && deferred_enable_n) {
+        // A batch queued on the main menu is announced now that the game is ready.
+        unsigned long long n = deferred_enable_n;
+        deferred_enable_n = 0;
+        for (unsigned long long i = 0; i < n; i++) {
+            ToggleEvent e = {5, ctx, deferred_enable[i], 1, {}};
             Handler *h = ctx->module_manager->lists[5];
             for (Handler f = *h; f; f = *++h) f(&e);
         }
-        manager->en_count = 0;
-        manager = ctx->module_manager;
     }
     if (manager->dis_count) {
         unsigned long long mask = 0;
-        for (unsigned long long i = 0; i != manager->dis_count; i++) {
+        unsigned long long n = manager->dis_count;
+        // rebuild() overwrites the list buffers in place and only keeps modules with enabled == 1,
+        // so once the flags below are cleared the type 5 list no longer holds the handlers of the
+        // modules being switched off. The toggle notification still has to reach them (the GUI
+        // frees the mouse and saves the settings from its own handler), so copy the list first.
+        Handler saved[64];
+        unsigned saved_n = 0;
+        for (Handler *h = manager->lists[5]; *h && saved_n < 64; h++) saved[saved_n++] = *h;
+        for (unsigned long long i = 0; i != n; i++) {
             Module *mod = manager->dis_list[i];
             mod->enabled = 0;
             mask |= handler_mask(mod);
         }
-        for (unsigned long long i = 0; i < manager->dis_count; i++) {
-            Module *mod = manager->dis_list[i];
+        rebuild(manager, mask);
+        if (game_ready) {
+            for (unsigned long long i = 0; i < n; i++) {
+                Module *mod = manager->dis_list[i];
+                ToggleEvent e = {5, ctx, mod, 0, {}};
+                for (unsigned k = 0; k < saved_n; k++) saved[k](&e);
+                release_owner(mod);
+            }
+        } else {
+            // No world yet. The module is already off and out of the handler tables, but
+            // release_owner still has to run: it hands the hotbar back (rotation_and_hotbar_ticks),
+            // which the module managers take on enable. Dropping the batch here left a module
+            // switched off on the main menu still claiming ownership, so the automatic hotbar
+            // switching of everything else stalled. Remember it for the first frame with a world.
+            for (unsigned long long i = 0; i < n; i++) defer_append(deferred_disable, &deferred_disable_n, manager->dis_list[i]);
+        }
+        manager->dis_count = 0;
+    } else if (game_ready && deferred_disable_n) {
+        // A disable batch queued on the main menu is released now that the game is ready.
+        unsigned long long n = deferred_disable_n;
+        deferred_disable_n = 0;
+        for (unsigned long long i = 0; i < n; i++) {
+            Module *mod = deferred_disable[i];
             ToggleEvent e = {5, ctx, mod, 0, {}};
-            Handler *h = ctx->module_manager->lists[5];
+            Handler *h = manager->lists[5];
             for (Handler f = *h; f; f = *++h) f(&e);
             release_owner(mod);
         }
-        rebuild(manager, mask);
-        slinky_logf("toggles: disable n=%llu mask=%llx first=%s", manager->dis_count, mask, *(const char **)manager->dis_list[0]);
-        manager->dis_count = 0;
     }
 }
 
@@ -240,7 +308,6 @@ extern "C" int create_module_manager(Mgr *manager, void (*setter)(void *mod, int
     for (unsigned long long i = 0; i != 0x43; i++) {
         Module *mod = ptr_to_aim_assist_module_descriptor[i];
         *(unsigned long long *)((char *)manager + 0x18 + ((unsigned long long)mod->cat << 4)) += 1;
-#pragma clang loop unroll_count(2)
         for (unsigned t = 0; t < 27; t++)
             if (mod->h[t].f) manager->reg[t].n++;
     }
@@ -278,7 +345,6 @@ extern "C" int create_module_manager(Mgr *manager, void (*setter)(void *mod, int
         unsigned long long cn = cr->n;
         cr->list[cn] = mod;
         cr->n = cn + 1;
-#pragma clang loop unroll_count(2)
         for (unsigned t = 0; t < 27; t++)
             if (mod->h[t].f) {
                 unsigned long long rn = manager->reg[t].n;

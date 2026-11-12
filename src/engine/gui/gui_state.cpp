@@ -218,7 +218,14 @@ extern "C" void draw_gui_frame(GuiState *gui, GWin *window, void *mgr, void *pro
     nvg_Translate(window->ig, 0.0f, mask11(*scroll, gui_state_sign_abs_masks, true));
     reset_layout_columns(gui);
     R16t win = make_rect(px, 0.0f, pw, window->h);
+    // dt is the time since the previous frame, and it doubles as the animation step below and as
+    // the smoothing factor handed to draw_tab_bar (dt / 0.05 must stay well under 1). Measuring it
+    // from card_anim_start_time without moving that mark made it the total time since the window
+    // opened, so every frame added the whole elapsed span again: card_open_progress saturated in a
+    // handful of frames and the tab highlight snapped into place, which is why the open animation
+    // never showed. Advancing the mark each frame keeps dt a frame delta.
     float dt = (float)(window->t - gui->card_anim_start_time);
+    gui->card_anim_start_time = window->t;
     double dtd = dt;
     float op = (float)((double)gui->card_open_progress + dtd / divisor_0_3);
     gui->card_open_progress = one < op ? one : op;
@@ -290,13 +297,21 @@ extern "C" void draw_gui_frame(GuiState *gui, GWin *window, void *mgr, void *pro
                             int error_code;
                             const char *msg;
                             switch (j) {
-                            case 0:
-                                if (get_profile_dirty()) {
+                            case 0: {
+                                // Reloading the profile that is already on disk cannot discard anything:
+                                // its own settings were written when it was saved, so the dirty flag here
+                                // only reflects edits that are already part of that file. Asking in that
+                                // case made the confirm dialog pop up on every profile switch for the rest
+                                // of the session after a single slider drag.
+                                const char *saved = get_saved_string();
+                                bool same_as_saved = saved && name && libc_strcmp(name, saved) == 0;
+                                if (get_profile_dirty() && !same_as_saved) {
                                     ask_sure_before_running_action(gui, mgr, profiles, name, 0);
                                     goto icon;
                                 }
                                 error_code = load_profile_name(name, mgr);
                                 goto result;
+                            }
                             case 1:
                                 if (!ent) {
                                     error_code = 0x1773;

@@ -1,61 +1,20 @@
 // 0xb000: settings profile load/save (cJSON), saved-string helper
+//
+// NOTE: there is deliberately no "load the global settings file" helper here. That job belongs to
+// load_settings() in engine/protected/init.cpp, which also restores the profile key binds. This file
+// originally carried a second copy (load_module_states_from_text) that no code ever called and whose
+// module filter was the inverse of the live profiles.cpp load_module_states(); keeping it around only
+// invited a future caller to load the wrong half of the modules. Do not reintroduce it.
 #include "slinky/engine.h"
 struct cJSON;
 FN(cJSON *, cjson_parse, (const char *text));                     // cJSON_Parse
 FN(cJSON *, cjson_get_object_item, (const cJSON *object, const char *name));  // cJSON_GetObjectItemCaseSensitive
-FN(int, cjson_is_array, (const cJSON *object));                        // cJSON_IsArray
 FN(char *, cjson_get_string_value, (const cJSON *object));                     // cJSON_GetStringValue
-FN(int, cjson_is_number, (const cJSON *object));                        // cJSON_IsNumber
 FN(void, cjson_delete, (cJSON *object));                             // cJSON_Delete
 FN(void, cjson_free_string, (void *p));                              // cJSON_free
-struct JNode { JNode *next, *prev, *child; int type; char *vs; int vi; double vd; char *key; };
 struct Mod { char padding_00[0x18]; unsigned char flags; };
 struct Mods { Mod **data; unsigned long long count; };
-FN(unsigned char, load_module_settings, (cJSON *root, Mods *mods, Mod *module));
-FN(void *, find_profile, (void *ctx, const char *name));
-typedef void (*SetBind)(void *mod, int key);
-FN(SetBind, profile_set_bind, (void *ctx));
 extern "C" const char str_profile_binds[], str_name[], str_bind[], str_slinky_in_profiles[], str_settings[];
-extern "C" const double offset_0_5;
-
-extern "C" bool load_module_states_from_text(const char *text, Mods *mods, void *ctx) {
-    cJSON *root = cjson_parse(text);
-    if (!root) return false;
-    bool ok;
-    for (unsigned long long i = 0; i < mods->count; i++) {
-        Mod *module = mods->data[i];
-        if (!(module->flags & 0x10)) continue;
-        if (!load_module_settings(root, mods, module)) { ok = false; goto out; }
-    }
-    {
-        cJSON *binds = cjson_get_object_item(root, str_profile_binds);
-        unsigned char notarr = !cjson_is_array(binds);
-
-        unsigned char nul = binds == 0;
-
-        ok = true;
-        if (nul | notarr) goto out;
-        for (JNode *child = ((JNode *)binds)->child; child; child = child->next) {
-            cJSON *json = cjson_get_object_item((cJSON *)child, str_name);
-            if (!json) continue;
-            char *name = cjson_get_string_value(json);
-            if (!name) continue;
-            void *mod = find_profile(ctx, name);
-            if (!mod) continue;
-            JNode *item = (JNode *)cjson_get_object_item((cJSON *)child, str_bind);
-            int key = 0;
-            if (cjson_is_number((cJSON *)item)) {
-                int v = (int)(item->vd + offset_0_5);
-                key = 0;
-                if ((unsigned)(v - 0x68) >= (unsigned)-0x67) {  key = v; }
-            }
-            profile_set_bind(ctx)(mod, key);
-        }
-    }
-out:
-    cjson_delete(root);
-    return ok;
-}
 
 FN(int, settings_path, (char **path));
 FN(int, settings_path_append, (char **path, const char *suffix));

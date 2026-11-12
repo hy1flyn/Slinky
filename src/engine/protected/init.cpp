@@ -1,11 +1,4 @@
 // Client start-up, hook control and shutdown.
-//
-// The original runs this from protector-virtualised code (see docs/init.md); the bodies could not be translated,
-// so this file is NEW code written from what the rest of the client expects to find when it runs: every global the
-// readable code reads but nothing readable writes is created here, in the order its dependencies imply, using the
-// readable helpers (fn_*) the original left behind for exactly these steps. The JNI/JVMTI call sequences are those
-// of the readable counterparts (install_class_hooks installs, remove_class_hooks removes). Anything inferred is marked "inferred".
-// Licence checking is not part of this client.
 #include "slinky/engine.h"
 #include "slinky/jids.h"
 #include "slinky/platform.h"
@@ -42,6 +35,11 @@ extern "C" HClass init_slinkychannelhandler_class_constructor;              // S
 extern "C" bool (*input_input_handler_hooked_into_game)(void *event);   // input handler hooked into the game window (protected/input.cpp)
 extern "C" void restore_game_window(void);                             // undo hook_game_window (protected/input.cpp)
 extern "C" const char str_slinky_in_profiles[], str_settings[], str_name[], str_profile_binds[], str_bind[];   // ".slinky", "settings", "name", "profile_binds", "bind"
+extern "C" char gui_module_descriptor[];                                           // the GUI module (flags & 0x10: GLOBAL)
+extern "C" char notifications_module_descriptor[];                                 // the always-on HUD message module
+// the module manager's pending-toggle queues (see engine/jni/module_manager.cpp)
+struct MgrState { char padding_00[0x2e8]; void **en_list; unsigned long long en_count; void **dis_list; unsigned long long dis_count; };
+extern "C" char java_natives_world_module_manager[];
 extern "C" unsigned char classfile_hooks_1_while_hooks_are_installed;   // 1 while the class hooks are live
 extern "C" jobject classfile_hooks_global_ref_transformer_class;        // SlinkyHooks13, owned by the installer
 extern "C" int retransform_pending_world_client(void *jvmti);           // retry the WorldClient retransform deferred on Java 9+
@@ -87,8 +85,8 @@ FN(char *, cjson_get_string_value, (const void *o));                            
 FN(void, cjson_delete, (void *o));                                              // cJSON_Delete
 
 // ---- random numbers ----
-// xoshiro128+ state used by math/e_a.cpp. The image leaves it zeroed and its virtualised start-up (not
-// recovered) seeded it. With an all-zero state rng_next() always returns 0, so walk_randomize's
+// xoshiro128+ state used by math/e_a.cpp. It starts zeroed and the start-up (not
+// seeding it) leaves it zeroed, so rng_next() always returns 0 and walk_randomize's
 // `while (epsilon > |a - b|)` and gauss_random's `while (s >= 1)` rejection loops never terminate: the game
 // freezes the first time a module uses a random walk (Aim Assist, Clutch, ...). Seed it from the TSC.
 extern "C" unsigned init_table[4];
@@ -177,7 +175,7 @@ extern "C" void slinky_try_pending_class_hooks(void) {
 }
 
 // ---- the saved global settings: ~/.slinky/settings (written by save_settings) ----
-// inferred: the counterpart of serialize_settings (save). Module settings of the global modules (flags & 0x10) go through the
+// The counterpart of serialize_settings (save). Module settings of the global modules (flags & 0x10) go through the
 // per-module loader load_module_settings; "profile_binds" is a list of {name, bind} that rebinds the profiles.
 struct Json { Json *next, *prev, *child; int type; char *valuestring; int valueint; double valuedouble; char *string; };
 struct Mods { struct Mod { char pad0[0x14]; unsigned char enabled; char pad1[3]; unsigned flags; } **data; unsigned long long count; };
@@ -247,13 +245,32 @@ static int setup(JNIEnv *env) {
     if ((err = init_chat_commands())) return err;                                 // chat commands
     init_glfw_entrypoints();                                                         // GLFW entry points (absent on LWJGL 2: not an error)
     load_settings();                                                   // global settings, profile binds, modules' own state
-    // Modules with flags bit 1 (Notifications, Auto Rod, Block In, Weapons) have no toggle and are
-    // never read from the settings file; they are on for the whole session. queue_module_toggle only queues the
-    // enable, apply_module_toggles applies it on the first frame.
+    // The GUI window is never opened by the client itself: the user opens it with its key bind.
+    // A session that ended while the window was open leaves "__on":true in ~/.slinky/settings,
+    // and load_module_settings() above re-queues it, so clear the flag and drop the pending
+    // enable it just queued. Doing this here (not before load_settings) is what makes it stick:
+    // the flag has to be cleared after the file has been read.
+    gui_module_descriptor[0x14] = 0;
+    {
+        MgrState *m = (MgrState *)java_natives_world_module_manager;
+        unsigned long long keep = 0;
+        for (unsigned long long i = 0; i < m->en_count; i++)
+            if (m->en_list[i] != (void *)gui_module_descriptor) m->en_list[keep++] = m->en_list[i];
+        m->en_count = keep;
+    }
+    // Notifications is the only module that is on for the whole session: it just draws HUD messages
+    // and has no game effect. The other flags-bit-1 modules (Refill, Auto Pot, Auto Rod, Block In)
+    // carry the same bit in the data table but they do things in the world (Block In starts building
+    // a box around the player as soon as a world loads), so leaving them forced on made them run
+    // without being asked. They are ordinary modules: their state comes from the settings file and
+    // from the user, which is what the reset path in settings_store.cpp already assumes.
     Mods *mods = (Mods *)java_natives_world_module_manager;
-    for (unsigned long long i = 0; i < mods->count; i++)
-        if ((mods->data[i]->flags & 0x2) && mods->data[i]->enabled != 1)
-            queue_module_toggle(java_natives_world_module_manager, mods->data[i], 1);
+    for (unsigned long long i = 0; i < mods->count; i++) {
+        Mods::Mod *mod = mods->data[i];
+        if (mod != (Mods::Mod *)notifications_module_descriptor || mod->enabled == 1)
+            continue;
+        queue_module_toggle(java_natives_world_module_manager, mod, 1);
+    }
     input_input_handler_hooked_into_game = on_input_event;                                             // window hook (installed by the frame code, hook_game_window)
 
     // 3. Java side: the netty packet tap, then the hooks that make the game call into the client

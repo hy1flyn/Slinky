@@ -1,4 +1,3 @@
-// helper functions (formerly address block; names inferred from behaviour).
 #include "slinky/engine.h"
 FN(unsigned char, is_held_item_accepted_weapon, (void *jvm, void *item, unsigned *flags));
 FN(void, queue_module_toggle, (void *module_manager, void *module, unsigned char enabled));

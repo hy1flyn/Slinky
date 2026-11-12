@@ -1,6 +1,4 @@
-// C runtime entry points the client calls by their address in the original image (fn_<rva>), bound to the real
-// Universal CRT (ucrtbase.dll). Every name was checked against the image: the import thunks (0x13cf50..) by how the
-// code uses them, the statically linked CRT copies (0xab000..) by running them under Unicorn on test inputs.
+// C runtime entry points, bound to the Universal CRT (ucrtbase.dll).
 #include <stddef.h>
 #include <stdarg.h>
 

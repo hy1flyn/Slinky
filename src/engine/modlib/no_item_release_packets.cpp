@@ -1,4 +1,3 @@
-// helper functions (formerly address block; names inferred from behaviour).
 #include "slinky/engine.h"
 extern "C" int no_item_release_mode; extern "C" unsigned char no_item_release_release_lock_flag; extern "C" float hitboxes_expand;
 struct Ev { char padding_00[8]; void *jvm; void *pkt; char padding_18[0xc]; int verdict; };

@@ -421,6 +421,23 @@ bool private_copy(const std::string &library, unsigned long pid, std::string &ho
 
 }  // namespace
 
+// The embedded payload is a Windows DLL, so a Linux build carries none and relies on
+// the .so path passed beside the program or with --lib.
+bool HasBundledLibrary() { return false; }
+
+std::string ExtractBundledLibrary(std::string &error) {
+    error = "no bundled library in this build";
+    return {};
+}
+
+std::streamoff NativeLogSize(unsigned long pid) {
+    std::string path = NativeLogPathFor(pid);
+    if (path.empty()) return 0;
+    std::error_code ec;
+    auto size = std::filesystem::file_size(path, ec);
+    return ec ? 0 : (std::streamoff)size;
+}
+
 std::vector<Process> ListProcesses() {
     std::vector<Process> out;
     DIR *proc = opendir("/proc");
@@ -432,7 +449,14 @@ std::vector<Process> ListProcesses() {
         if (!pid) continue;
         std::string cmdline = command_line_of(pid);
         if (cmdline.empty()) continue;   // kernel thread
-        out.push_back(Process{pid, name_of(pid), cmdline});
+        Process process;
+        process.pid = pid;
+        process.name = name_of(pid);
+        process.command_line = cmdline;
+        // Same meaning as the Windows marker: LWJGL mapped means this is the game.
+        std::string lowered = lower(process.name + " " + cmdline);
+        if (lowered.find("java") != std::string::npos) process.is_minecraft = IsMinecraftProcess(pid);
+        out.push_back(std::move(process));
     }
     closedir(proc);
 
@@ -479,7 +503,10 @@ bool FindTarget(const std::string &target, Process &out, std::string &error) {
         out.pid = std::strtoul(target.c_str(), nullptr, 10);
         out.name = name_of(out.pid);
         out.command_line = command_line_of(out.pid);
-        if (out.pid && !out.name.empty()) return true;
+        if (out.pid && !out.name.empty()) {
+            out.is_minecraft = IsMinecraftProcess(out.pid);
+            return true;
+        }
         error = "no process with pid " + target;
         return false;
     }
@@ -498,8 +525,50 @@ bool FindTarget(const std::string &target, Process &out, std::string &error) {
             return true;
         }
     }
-    error = "no process matching '" + target + "'";
+    error = "no Java process matching '" + target + "'";
     return false;
+}
+
+// Whether the process has LWJGL mapped, read from its own map file. Matches the
+// Windows test: a launcher never loads LWJGL, and the game cannot run without it.
+bool IsMinecraftProcess(unsigned long pid) {
+    std::string maps = read_small_file("/proc/" + std::to_string(pid) + "/maps");
+    return lower(maps).find("lwjgl") != std::string::npos;
+}
+
+bool IsLibraryLoaded(unsigned long pid, const std::string &library) {
+    size_t slash = library.find_last_of('/');
+    std::string wanted = lower(slash == std::string::npos ? library : library.substr(slash + 1));
+    if (wanted.empty()) return false;
+    std::string maps = lower(read_small_file("/proc/" + std::to_string(pid) + "/maps"));
+    return maps.find(wanted) != std::string::npos;
+}
+
+std::string NativeLogPath() {
+    const char *tmp = std::getenv("TMPDIR");
+    std::string dir = (tmp && *tmp) ? tmp : "/tmp";
+    if (!dir.empty() && dir.back() != '/') dir += '/';
+    return dir + "slinky-<pid>/slinky-native.log";
+}
+
+std::string NativeLogPathFor(unsigned long pid) {
+    const char *tmp = std::getenv("TMPDIR");
+    std::string dir = (tmp && *tmp) ? tmp : "/tmp";
+    if (!dir.empty() && dir.back() != '/') dir += '/';
+    dir += "slinky-" + std::to_string(pid) + "/";
+    const char *candidates[] = {"slinky-native.log", "slinky.log", "slinky_native.log"};
+    for (const char *name : candidates) {
+        std::ifstream in(dir + name);
+        if (in) return dir + name;
+    }
+    return dir + "slinky-native.log";
+}
+
+unsigned CountMinecraftCandidates() {
+    unsigned count = 0;
+    for (const Process &process : ListProcesses())
+        if (process.is_minecraft) count++;
+    return count;
 }
 
 bool Inject(unsigned long pid, const std::string &library, const LogFn &log) {

@@ -1,7 +1,4 @@
-// NanoVG entry points the client calls by their address in the original image (fn_<rva>), bound to upstream NanoVG
-// (third_party/nanovg, the same version: NVGstate is 0x110 bytes and nstates sits at +0x2288 in both).
-// Identified from the argument shapes and checked on the state offsets each setter writes (e.g. nvg_StrokeWidth writes
-// state+0xac = strokeWidth, nvg_TextAlign state+0x108 = textAlign, nvg_Scissor clamps w/h like nvgScissor).
+// NanoVG entry points, bound to upstream NanoVG (third_party/nanovg).
 #include "slinky/gl_slots.h"
 extern "C" {   // the GL backend headers have no C++ guard
 #include "nanovg.h"

@@ -242,7 +242,7 @@ extern "C" int find_glfw_entrypoint(void **ctx, unsigned slot, const char *path,
     return 0;
 }
 
-// ---- small helpers the first gap scan missed ----
+// ---- small helpers ----
 extern "C" void *chat_font_context;
 FN(void, libc_free, (void *ptr));
 FN(unsigned long long, libc_strlen, (const char *text));

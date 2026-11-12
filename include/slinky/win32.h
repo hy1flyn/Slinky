@@ -1,5 +1,4 @@
-// Minimal Win32 declarations for the readable reimplementations in src/engine/protected/.
-// (The image calls these through the protector's encrypted import slots; here they are ordinary imports.)
+// Minimal Win32 declarations used by the engine layer.
 #pragma once
 #include <stddef.h>
 

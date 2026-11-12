@@ -291,7 +291,7 @@ extern "C" void java_render_item_render_item_overlay_into_gui(Jvm *jvm, jobject 
         JNI(jvm)->CallVoidMethod(jvm->env, object, (jmethodID)jvm->ids->RenderItem_renderItemOverlayIntoGUI, other_object, b, c, d, e, f);
 }
 
-// ---- JNI bridge functions found by the gap scan (no caller outside the virtualised init) ----
+// ---- JNI bridge functions ----
 extern "C" void java_call_framebuffer_bind_framebuffer(Jvm *jvm, void *framebuffer, unsigned char value) {
     JCALL1(jvm, CallVoidMethod, framebuffer, ids->Framebuffer_bindFramebuffer, value);
 }

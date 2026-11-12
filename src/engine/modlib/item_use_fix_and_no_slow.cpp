@@ -1,4 +1,3 @@
-// helper functions (formerly address block; names inferred from behaviour).
 // cflags: -mllvm -switch-to-lookup=false
 #include "slinky/engine.h"
 FN(void *, java_get_minecraft_player_controller, (void *jvm, void *minecraft));

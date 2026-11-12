@@ -70,6 +70,10 @@ add_library(slinky SHARED ${ENGINE_SRC} ${LOGIC_SRC} ${MODULE_SRC} ${PLATFORM_SR
 add_dependencies(slinky slinky_imports)
 target_link_libraries(slinky PRIVATE ${IMPORT_LIBS})
 set_target_properties(slinky PROPERTIES PREFIX "" LINKER_LANGUAGE CXX)
+# The client ships as SlinkyNative.dll, the name the Java launcher looks for and the
+# name the injector reports when it is already mapped. The CMake target stays `slinky`
+# so every reference to it elsewhere is unchanged.
+set_target_properties(slinky PROPERTIES OUTPUT_NAME "SlinkyNative")
 set_source_files_properties(${DATA_OBJ} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 
 # The code generation is the one the sources were verified against (tools/asmdiff.py CFLAGS): same optimiser

@@ -1,4 +1,3 @@
-// Readable reimplementations of protector-obfuscated engine functions (0x4bcb0 - 0x4c390):
 // Win32 lookups, the game-window input hook and the self-unload thread.
 //
 // The client subclasses the game window (hook_game_window). Its window procedure (game_window_proc) turns window messages
@@ -7,7 +6,7 @@
 // (auto clicker) are posted to the window as private messages 0x8cf3..0x8cf6 (post_synthetic_click) and become real
 // WM_*BUTTON* messages after the handler has seen them.
 //
-// Marked "inferred": the image hides that API behind an encrypted import slot and it was named from its
+// The API is named from its
 // arguments and how the result is used.
 #include "slinky/engine.h"
 #include "slinky/win32.h"
@@ -107,7 +106,7 @@ extern "C" LRESULT game_window_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         e.move.x = (short)(lp & 0xffff);
         e.move.y = (short)(lp >> 16);
         // when the handler swallows a move the image also runs one protected call on data_304bc8
-        // (not recovered: its import slot is only filled at load time)
+        // (its import slot is only filled at load time)
         if (input_input_handler_hooked_into_game(&e)) return 0;
         break;
     case 0x0201: case 0x0202:   // left button
@@ -172,7 +171,7 @@ extern "C" void hook_game_window() {
 }
 
 // ---- undo hook_game_window (called once while unloading) ----
-// inferred: the body is virtualised; its place in the unload sequence (after the hooks are disabled, before
+// Its place in the unload sequence (after the hooks are disabled, before
 // the unload thread) and the state hook_game_window leaves behind make this the counterpart of hook_game_window.
 // The HWND is remembered from the install: restoring on a different foreground window would leave the
 // actually-subclassed window pointing at game_window_proc after this DLL is freed.

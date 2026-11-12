@@ -219,6 +219,7 @@ extern "C" void hook_update_display(JNIEnv *env) {
     int W = display_width(&jvm);
     int H = display_height(&jvm);
     if (0.0 > frame_start_time) frame_start_time = now;
+
     if (frame_render_target && !is_event_handled(java_natives_world_module_manager, 0xa)) {
         render_target_width = W;
         render_target_height = H;
@@ -239,6 +240,7 @@ extern "C" void hook_update_display(JNIEnv *env) {
             dispatch_event(java_natives_world_module_manager, (HEvent *)&e);
             int flags = e.flags;
             frame_input_flag = flags & 1;
+
             if (flags & 1) {
                 if ((flags & 2) || frame_repass_needed || frame_resize_cooldown > 0) {
                     unsigned char again = (unsigned)(flags & 2) >> 1;
@@ -246,6 +248,7 @@ extern "C" void hook_update_display(JNIEnv *env) {
                     begin_frame_framebuffer(frame_render_target, now);
                     GuiEvent2 e2 = {0xa, &ctx, frame_render_target, fdt, {}};
                     dispatch_event(java_natives_world_module_manager, (HEvent *)&e2);
+
                     clear_frame(frame_render_target);
                     (*ptr_to_pGlPopAttrib)();
                     frame_repass_needed = again;
@@ -263,11 +266,12 @@ extern "C" void hook_update_display(JNIEnv *env) {
             frame_repass_needed = 1;
         }
     }
-    if (has_queued_modules(java_natives_world_module_manager)) {
-        spin_lock();
-        apply_module_toggles(&ctx);
-        frame_spinlock = 0;
-    }
+    // Called every frame, not only when something is queued: a batch that was applied on the
+    // main menu still owes its toggle notifications, and those are announced by this call
+    // once a world and a player exist.
+    spin_lock();
+    apply_module_toggles(&ctx);
+    frame_spinlock = 0;
     tick_modules(&ctx, timer, now);
     tick_netty(&jvm);
     if (!is_unload_requested_flag()) return;

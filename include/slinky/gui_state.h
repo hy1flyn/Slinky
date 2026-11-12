@@ -1,5 +1,5 @@
 // Layout of the client GUI state block (the `gui` argument of every GUI helper).
-// Field offsets match the original image; overlapping uses are expressed as unions.
+// Overlapping uses are expressed as unions.
 #pragma once
 #include <stddef.h>
 

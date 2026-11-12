@@ -1,4 +1,3 @@
-// helper functions (formerly address block; names inferred from behaviour).
 #include "slinky/engine.h"
 extern "C" void *friend_set_friend_table; extern "C" char friend_set_table_meta[]; extern "C" int friend_set_dirty_count; extern "C" unsigned char friends_friends_setting_field_0x7c;
 FN(void, vector_erase, (void *vec, int elem, void *hdr, void *key));

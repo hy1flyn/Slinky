@@ -6,8 +6,8 @@
 // Packets are released at once when you attack, stop sprinting ("flush_sprint_reset") or
 // throw a splash potion ("flush_splash_potion").
 //
-// The symbol names "lag_range_target_position*" / "..._from_packets" are historical: they hold
-// OUR position as last sent to the server (see the comments below).
+// The "lag_range_target_position*" / "..._from_packets" names hold OUR position as last sent
+// to the server (see the comments below).
 //
 // Callbacks:
 //   lag_range_attack_hook                every attack: did the hit land this tick?

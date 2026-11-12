@@ -1,4 +1,3 @@
-// helper functions (formerly address block; names inferred from behaviour).
 #include "slinky/engine.h"
 extern "C" int no_hit_delay_mode, no_use_delay_remaining_ticks, no_use_delay_last_seen_slot_state; extern "C" unsigned char no_use_delay_allow_desync_value;
 struct Ev { char padding_00[8]; Ctx *ctx; void *packet; unsigned char on; int verdict; };

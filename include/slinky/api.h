@@ -1,10 +1,7 @@
 // Slinky client - shared declarations for every module.
-// Symbols keep the names they had in the original binary (fn_<rva>, data_<rva>,
-// rdata_<rva>), so the code can be compared with the decompiled image one
-// function at a time.
 #pragma once
 
-// ---- widget API (GUI drawing), original RVAs ----
+// ---- widget API (GUI drawing) ----
 extern "C" void W_bool(void *a, void *ctx, void *cfg);    // 0x0cef0
 extern "C" void W_slider(void *a, void *ctx, void *cfg);  // 0x0cf30
 extern "C" void W_range(void *a, void *ctx, void *cfg);   // 0x0cfb0
@@ -21,7 +18,7 @@ extern "C" void R_enum(void *mgr, const char *name, void *cfg);  // 0x0c6f0
 extern "C" void R_key(void *mgr, const char *name, void *cfg);   // 0x0c7e0
 extern "C" void R_kind2(void *mgr, const char *name, void *cfg); // 0x0ca00
 
-// ---- original .rdata strings (symbol = RVA) ----
+// ---- string tables ----
 #define S(n) extern "C" const char n[]
 #define D(n) extern "C" unsigned char n[]
 

@@ -85,6 +85,8 @@ FN(void, nvg_BeginPath, (void *nvg));
 FN(void, nvg_Fill, (void *nvg));
 FN(void, nvg_RoundedRectVarying, (void *nvg, float x, float y, float w, float h, int a, int b, int c, float rounding));
 FN(float, nvg_text, (void *nvg, float x, float y, const char *text, void *end));
+FN(double, time_now, ());
+extern "C" void slinky_logf(const char *fmt, ...);
 
 static inline __attribute__((always_inline)) char lower(char ch) {
     return ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch;
@@ -117,15 +119,23 @@ static Entry *find(Module *module) {
 }
 
 extern "C" void mod_overlay_on_hud_tick(FlagHook *hook) {
-    unsigned f = hook->flags;
-    hook->flags = f | 1;
-    if (mod_overlay_animating || mod_overlay_fade > 0.0f)
-        hook->flags = f | 3;
+    // Bit 0 asks the frame code to composite the HUD layer at all; bit 1 asks for a
+    // repaint of that layer. The overlay always needs both: it is the module list, and
+    // it has to keep redrawing while rows animate and fade. It used to rely on the GUI
+    // module's own hud tick for bit 1, but that tick only runs while the GUI module is
+    // enabled, so the whole HUD stopped repainting outside a world (where a pending
+    // repass happened to cover for it) the moment the window was shut. Ask for both here.
+    hook->flags |= 3;
 }
 
 extern "C" void mod_overlay_on_profile_event(FlagHook *hook) {
-    if (hook->flags == 0)
-        mod_overlay_dirty = 1;
+    // Rebuild on every profile event, not only when the field read here is zero. Event 0xb carries
+    // a kind at the same offset (ProfEvent: type, padding, name, kind), so the value seen here is
+    // 1..3 for save / open-folder / delete instead of 0 for load. A load is the only one that
+    // changes which modules are on, and it is the one that reads as 0, but reading a foreign field
+    // to decide that is fragile: a reload from anywhere else would be silently skipped.
+    (void)hook;
+    mod_overlay_dirty = 1;
 }
 
 extern "C" void mod_overlay_on_overlay_unload(Hook *hook) {
@@ -136,8 +146,13 @@ extern "C" void mod_overlay_on_overlay_unload(Hook *hook) {
 }
 
 extern "C" void mod_overlay_rebuild_visibility(ModList *list) {
+    // Both conditions matter. This used to clear only the entries the filter rejects, so a module
+    // that was switched off by a profile load kept its entry alive: nothing else ever turns it off,
+    // because the per-module toggle handler that does is not called for a whole-profile swap. The
+    // stale rows then showed modules as on that were off. The second pass below re-lights or adds
+    // whatever is enabled, so clearing on enabled != 1 here is enough to resync the list.
     for (unsigned long long i = 0; i < mod_overlay_entry_count; i++)
-        if (!shown(mod_overlay_entries[i].mod))
+        if (!shown(mod_overlay_entries[i].mod) || mod_overlay_entries[i].mod->enabled != 1)
             mod_overlay_entries[i].alive = 0;
     for (unsigned long long i = 0; i < list->count; i++) {
         Module *module = list->mods[i];

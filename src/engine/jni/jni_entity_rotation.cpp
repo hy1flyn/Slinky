@@ -272,7 +272,7 @@ extern "C" jobject java_jni_is_instance_of_entity_player(Jvm *jvm, jobject candi
     return JCALLN(jvm, IsInstanceOf, candidate, (jclass)ids->EntityPlayer) ? candidate : nullptr;
 }
 
-// ---- JNI bridge functions found by the gap scan (no caller outside the virtualised init) ----
+// ---- JNI bridge functions ----
 extern "C" void java_call_entity_set_angles(Jvm *jvm, void *entity, float value, float a3) {
     JCALL1(jvm, CallVoidMethod, entity, ids->Entity_setAngles, ({ double y = value;  y; }), (double)a3);
 }
@@ -300,7 +300,7 @@ extern "C" jobject java_jni_is_instance_of_entity_player_sp(Jvm *jvm, jobject ca
     return JCALLN(jvm, IsInstanceOf, candidate, (jclass)ids->EntityPlayerSP) ? candidate : nullptr;
 }
 
-// ---- functions the first gap scan missed (padding / tail-jump neighbours) ----
+// ---- more bridge functions ----
 extern "C" jdouble java_get_entity_motion_y(Jvm *jvm, void *entity) {
     return JCALL(jvm, GetDoubleField, entity, ids->Entity_motionY);
 }

@@ -257,6 +257,29 @@ extern "C" void java_call_static_mouse_set_grabbed(Jvm *jvm, bool grab) {
 extern "C" void java_call_static_mouse_set_cursor_position(Jvm *jvm, int x, int y) {
     JCALL2(jvm, CallStaticVoidMethod, (jclass)ids->Mouse, (jmethodID)ids->Mouse_setCursorPosition, x, y);
 }
+// Minecraft.setIngameFocus(): bails out unless the window is active, then sets
+// inGameHasFocus, calls MouseHelper.grabMouse() and closes the open screen. That is the whole
+// teardown the GUI close needs. Mouse.setGrabbed(true) on its own leaves inGameHasFocus false,
+// so the game keeps treating the window as unfocused and the cursor stays free.
+// Every naming scheme the client may run under is tried: MCP, SRG, Mojang (what Lunar and other
+// modern remappers use) and the official obfuscated name.
+extern "C" void java_call_minecraft_set_ingame_focus(Jvm *jvm, jobject minecraft) {
+    static jmethodID cached;
+    jmethodID id = cached;
+    if (!id) {
+        static const char *const names[] = {
+            "setIngameFocus", "func_71381_h", "f_71381_h", "n",
+        };
+        for (unsigned i = 0; i < sizeof names / sizeof names[0] && !id; i++) {
+            id = JNI(jvm)->GetMethodID(jvm->env, (jclass)jvm->ids->Minecraft, names[i], "()V");
+            if (!id) JNI(jvm)->ExceptionClear(jvm->env);
+        }
+        if (!id)
+            return;
+        cached = id;
+    }
+    JCALL1(jvm, CallVoidMethod, minecraft, id);
+}
 extern "C" void keyboard_send_key(Jvm *jvm, jobject object, unsigned short c, int k) {
     JCALL1(jvm, CallVoidMethod, object, (jmethodID)ids->GuiScreen_keyTyped, (int)c, k);
 }
@@ -279,7 +302,7 @@ extern "C" void java_call_generic_future_listener(Jvm *jvm, jobject generic_futu
     }
 }
 
-// ---- JNI bridge functions found by the gap scan (no caller outside the virtualised init) ----
+// ---- JNI bridge functions ----
 extern "C" jint java_get_timer_elapsed_ticks(Jvm *jvm, void *timer) {
     return JCALL(jvm, GetIntField, timer, ids->Timer_elapsedTicks);
 }
@@ -296,7 +319,7 @@ extern "C" void java_set_item_stack_stack_size(Jvm *jvm, void *item_stack, int v
     JCALL(jvm, SetIntField, item_stack, ids->ItemStack_stackSize, value);
 }
 
-// ---- functions the first gap scan missed (padding / tail-jump neighbours) ----
+// ---- more bridge functions ----
 extern "C" jobject java_new_item_stack_init(Jvm *jvm, void *item_stack) {
     return JCALLN(jvm, NewObject, ids->ItemStack, ids->ItemStack__init_, item_stack);
 }

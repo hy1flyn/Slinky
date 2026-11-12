@@ -1,0 +1,15 @@
+// Embedded client library.
+//
+// The injector ships as a single Slinky.exe: the client DLL travels inside it as an
+// RCDATA resource and is written to a temporary folder at run time, exactly as the
+// reference Java launcher does with resource 200. Nothing has to sit beside the .exe.
+//
+// The payload is copied in by CMake at configure time (see CMakeLists.txt) from
+// SLINKY_PAYLOAD, so this file is generated output and must not be edited by hand.
+//
+// RCDATA rather than a custom type because FindResourceW(nullptr, MAKEINTRESOURCEW(200),
+// RT_RCDATA) is the lookup the reference uses and the one the extractor below repeats.
+
+#include <windows.h>
+
+200 RCDATA "@SLINKY_PAYLOAD@"

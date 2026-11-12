@@ -17,7 +17,13 @@ extern "C" void tick_modules(Ctx *ctx, void *object, double now) {
     if (tick_rotation_last_time == 0.0) tick_rotation_last_time = now;
     update_frame_time();
     if (!ctx->world || !ctx->player) {
+        // On the main menu there is no player to read a rotation from, but the tick event
+        // still has to go out: the HUD modules (the module list, the notification ages) are
+        // driven by it and they are shown outside a world too. Only the rotation maths below
+        // needs a player, so it keeps its own guard.
         tick_rotation_last_time = now;
+        TickEvent e = {1, ctx, 0.0f, 0, 0.0, {}};
+        dispatch_event(java_natives_world_module_manager, &e);
         return;
     }
     Rot d = rot_sub(get_entity_rotation(ctx->jvm, ctx->player), tick_rotation_previous);

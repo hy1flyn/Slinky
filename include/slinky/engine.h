@@ -1,5 +1,4 @@
-// Engine-side types and helpers shared by the recoded module logic.
-// Everything is named after its original RVA until its purpose is understood.
+// Engine-side types and helpers shared by the module logic.
 #pragma once
 #include "slinky/api.h"
 

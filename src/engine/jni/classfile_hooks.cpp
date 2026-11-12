@@ -94,6 +94,12 @@ extern "C" bool is_in_game(Jvm *jvm, void *minecraft) {
     return JCALLN(jvm, GetBooleanField, minecraft, ids->Minecraft_inGameHasFocus) != 0;
 }
 
+extern "C" void set_in_game(Jvm *jvm, void *minecraft, unsigned char value) {
+    if (!jvm->ids->Minecraft_inGameHasFocus)
+        return;
+    JCALL(jvm, SetBooleanField, minecraft, ids->Minecraft_inGameHasFocus, value != 0);
+}
+
 extern "C" jint java_get_minecraft_left_click_counter(Jvm *jvm, void *minecraft) {
     return JCALL(jvm, GetIntField, minecraft, ids->Minecraft_leftClickCounter);
 }
@@ -233,7 +239,7 @@ found:
     __sync_val_compare_and_swap(&classfile_hooks_first_error, 0, err);
 }
 
-// ---- JNI bridge functions found by the gap scan (no caller outside the virtualised init) ----
+// ---- JNI bridge functions ----
 extern "C" jint java_get_minecraft_right_click_delay_timer(Jvm *jvm, void *minecraft) {
     return JCALL(jvm, GetIntField, minecraft, ids->Minecraft_rightClickDelayTimer);
 }
@@ -395,7 +401,7 @@ extern "C" int rewrite_instruction(HookTable *t, CP *cp, RBuf22 *in, WBuf22 *out
     return 0;
 }
 
-// ---- functions the first gap scan missed (padding / tail-jump neighbours) ----
+// ---- more bridge functions ----
 extern "C" void java_set_minecraft_right_click_delay_timer(Jvm *jvm, void *minecraft, int value) {
     JCALL(jvm, SetIntField, minecraft, ids->Minecraft_rightClickDelayTimer, value);
 }

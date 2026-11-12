@@ -280,7 +280,7 @@ extern "C" jobject java_get_game_settings_key_8_or_9(Jvm *jvm, jobject game_sett
     return JCALL(jvm, GetObjectArrayElement, (jobjectArray)object, ids->variant == 0 ? 8 : 9);
 }
 
-// ---- JNI bridge functions found by the gap scan (no caller outside the virtualised init) ----
+// ---- JNI bridge functions ----
 extern "C" jobject java_call_world_get_entity_by_id(Jvm *jvm, void *world, int value) {
     return JCALLN(jvm, CallObjectMethod, world, ids->World_getEntityByID, value);
 }
@@ -289,7 +289,7 @@ extern "C" jboolean java_call_list_add(Jvm *jvm, void *list, void *value) {
     return JCALLN(jvm, CallBooleanMethod, list, ids->List_add, value);
 }
 
-// ---- functions the first gap scan missed (padding / tail-jump neighbours) ----
+// ---- more bridge functions ----
 extern "C" jboolean java_call_list_remove(Jvm *jvm, void *list, void *value) {
     return JCALLN(jvm, CallBooleanMethod, list, ids->List_remove, value);
 }

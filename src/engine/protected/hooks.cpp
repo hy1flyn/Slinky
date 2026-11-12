@@ -1,5 +1,4 @@
-// Readable version of the native getMouseOver hook (0x7410) including its first-call GUI setup; notes on the
-// protector-touched functions around it (0x6e10 hook control is in init.cpp, CRT 0x4cd50 is not client code).
+// Native getMouseOver hook, including its first-call GUI setup.
 #include "slinky/engine.h"
 #include "slinky/jids.h"
 #include "slinky/platform.h"
@@ -33,11 +32,11 @@ FN(void, reach_distance_check, (void *reach_args));                             
 FN(void, release_tracked_owner, ());
 
 // ---- GUI setup, once, on the render thread of the game (needs its OpenGL context) ----
-// New code (the original does this inside its virtualised first-call block): load the GL entry points, create the
-// NanoVG context the GUI draws with, and the window object (GuiWindow, created below) that carries it and the font ids.
+// Load the GL entry points, create the NanoVG context the GUI draws with, and the window object
+// (GuiWindow, created below) that carries it and the font ids.
 extern "C" int slinky_load_gl(void *(*get)(const char *name));
 extern "C" void *nvgCreateGL3(int flags);
-enum { NVG_ANTIALIAS = 1, NVG_STENCIL_STROKES = 2 };   // inferred: the usual flags; the shader is the EDGE_AA variant
+enum { NVG_ANTIALIAS = 1, NVG_STENCIL_STROKES = 2 };   // the shader is the EDGE_AA variant
 struct GuiWindow { void *ig; double t; int w, h; float sw, sh, scale; int padding_24; void *fb; float clear[4];
                    int font[2]; int tex; float tw, th; };       // +0x48 texture, +0x4c/+0x50 atlas size
 extern "C" GuiWindow *frame_render_target;
@@ -50,7 +49,7 @@ FN(void, libc_free, (void *ptr));
 FN(int, find_glfw_entrypoint, (void **ctx, unsigned slot, const char *name, const unsigned char *data, int size));
 // The click GUI's tab bar: 7 entries {int kind; int pad; const char *label} at state+0x2e0, rendered by draw_tab_bar
 // and indexed by the selected tab (state+0x350) in draw_gui_frame. The image leaves the array zeroed in .data and fills
-// it during start-up (the virtualised block, not recovered) - without this the first GUI frame calls nvgText(NULL).
+// it during start-up - without this the first GUI frame calls nvgText(NULL).
 struct GuiTab { int kind; int padding_04; const char *label; };
 static const char *const tab_label[7] = {"Combat", "Move", "Visual", "Block", "Utility", "Profiles", "Unload"};
 static void gui_tabs_init() {
@@ -161,7 +160,7 @@ extern "C" void hook_get_mouse_over(JNIEnv *env, jclass, void *renderer, float p
 // on a TEB field and retries with a 1000 ms sleep, then calls into the CRT (crt_initterm). crt_dll_attach_helper is only
 // called from it. This is Microsoft runtime code, not client logic (see vcruntime's dll_dllmain.cpp).
 
-// ---- empty_placeholder(gui state): virtualised, NOT RECOVERED ----
+// ---- empty_placeholder(gui state) ----
 // It prepares a message from a short string stored encrypted at rdata_140a7b (right behind "Unload Slinky?") and is
 // only started through reset_key_state. The decrypted text and the effect are unknown, so this is a no-op placeholder.
 extern "C" void empty_placeholder(void *gui) { (void)gui; }

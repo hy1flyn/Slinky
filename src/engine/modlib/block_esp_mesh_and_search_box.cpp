@@ -1,4 +1,3 @@
-// helper functions (formerly address block; names inferred from behaviour).
 #include "slinky/engine.h"
 FN(void, libc_free, (void *ptr));
 FN(unsigned long long, libc_strlen, (const char *str));

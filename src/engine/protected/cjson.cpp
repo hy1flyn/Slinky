@@ -1,8 +1,5 @@
-// Readable versions of the three protector-mutated cJSON functions of the image (upstream cJSON 1.7.x, MIT;
-// the rest of cJSON is translated in modlib/cjson_*.cpp). The visible parts of the image's copies match
-// upstream (literal checks with strncmp, ensure()/print_string_ptr() calls, strcmp lookups), so upstream is
-// reproduced here, with parse_number/parse_array and print_number/print_array/print_object inlined into
-// parse_value/print_value as the image does.
+// cJSON 1.7.x (MIT), with parse_number/parse_array and print_number/print_array/print_object inlined
+// into parse_value/print_value.
 //   cjson_parse_value  parse_value        cjson_print_value  print_value        cjson_get_object_item_case_option  get_object_item
 #include "slinky/cjson.h"
 

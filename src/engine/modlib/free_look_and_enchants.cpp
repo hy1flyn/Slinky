@@ -1,4 +1,3 @@
-// helper functions (formerly address block; names inferred from behaviour).
 #include "slinky/engine.h"
 extern "C" char free_look_module_descriptor[]; extern "C" unsigned char free_look_active; extern "C" void *free_look_saved_camera;
 extern "C" int free_look_saved_perspective, free_look_target_perspective_value;

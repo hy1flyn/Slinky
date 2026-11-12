@@ -6,6 +6,7 @@ extern "C" unsigned char java_natives_frame_client_shutting_down_natives_check; 
 extern "C" void slinky_logf(const char *fmt, ...);
 struct Rot { float yaw, pitch; };
 FN(unsigned char, is_silent_rotation_active, ());
+FN(double, time_now, ());
 FN(Rot, get_silent_rotation, ());
 FN(void *, should_render_player_name, (Jvm *jvm, void *render_player, void *other_object));
 FN(void, java_set_render_manager_player_view_x, (Jvm *jvm, void *render_manager, float value));
@@ -303,6 +304,7 @@ extern "C" double gl_modelview_matrix[16], gl_projection_matrix[16];
 struct R3D { long long type; Vec3 cam; HCtx *ctx; float pt; unsigned char flag; char rest[0x1b]; };
 struct R2D { long long type; Vec3 cam; HCtx *ctx; float w, h; double *proj, *mv; float pt; unsigned char flag, padding_5, padding_6, padding_7; };
 extern "C" void render_world_events(JNIEnv *env, unsigned mask, unsigned char flag) {
+
     if (java_natives_frame_client_shutting_down_natives_check) return;
     if (!frame_render_target) return;
     static int events_logged;
@@ -310,7 +312,7 @@ extern "C" void render_world_events(JNIEnv *env, unsigned mask, unsigned char fl
         events_logged = 1;
         slinky_logf("frame: first post_world_clear mask=%x flag=%d target=%p", mask, (int)flag, frame_render_target);
     }
-    if (mask == 0x100) {
+    if (mask & 0x100) {
         Jvm jvm = {java_natives_world_cached_jni_ids, env};
         void *minecraft = get_minecraft(&jvm);
         void *player = get_local_player(&jvm, minecraft);
@@ -318,15 +320,28 @@ extern "C" void render_world_events(JNIEnv *env, unsigned mask, unsigned char fl
         if (silent) set_silent_rotation_active(&jvm, player, true);
         unsigned char no3d = is_event_handled(java_natives_world_module_manager, 6);
         unsigned char no2d = is_event_handled(java_natives_world_module_manager, 7);
+
         if (!(no3d & no2d)) {
             void *world = get_world(&jvm, minecraft);
             void *view = get_render_view_entity(&jvm, minecraft);
-            static int worldrender_logged;
-            if (!worldrender_logged) {
-                worldrender_logged = 1;
-                slinky_logf("worldrender: no3d=%d no2d=%d player=%p world=%p view=%p", (int)no3d, (int)no2d, player, world, view);
+            // Logged while diagnosing the HUD on the main menu: the 2D pass needs to know
+            // whether the render view exists there. Rate limited to once a second so the
+            // log stays readable.
+            {
+                static double last_log;
+                double now = time_now();
+                if (now - last_log >= 1.0) {
+                    last_log = now;
+                    slinky_logf("worldrender: mask=%x no3d=%d no2d=%d player=%p world=%p view=%p in_game=%d",
+                                mask, (int)no3d, (int)no2d, player, world, view,
+                                (int)(ptr_to_gui_module_descriptor[0x14] ? 0 : is_in_game(&jvm, minecraft)));
+                }
             }
-            if (player && world && view) {
+            // The 2D pass (module list, notifications, "Press X to open GUI") also runs on the
+            // main menu and the pause screen, where player/world/view are all NULL. Only the 3D
+            // pass needs them. The context is therefore built whenever the game object exists,
+            // and the camera falls back to the origin when there is no render view.
+            if (minecraft) {
                 HCtx ctx;
                 ctx.jvm = &jvm; ctx.module_manager = java_natives_world_module_manager; ctx.profile_list = init_profile_list; ctx.minecraft = minecraft; ctx.world = world; ctx.player = player;
                 ctx.key_state_table = java_natives_world_key_state_table_one_byte; ctx.target = java_natives_frame_module_manager_target_state;
@@ -334,20 +349,27 @@ extern "C" void render_world_events(JNIEnv *env, unsigned mask, unsigned char fl
                 *(int *)&ctx.padding_41[0] = 0;
                 ctx.padding_44 = 0;
                 float partial_ticks = get_partial_ticks(&jvm, get_timer(&jvm, minecraft));
-                Vec3 cur = java_get_entity_pos_x(&jvm, view);
-                Vec3 prev = java_get_entity_prev_pos_x(&jvm, view);
-                Vec3 cam = vec3_lerp(prev, cur, (double)partial_ticks);
+                Vec3 cam = {};
+                if (view) {
+                    Vec3 cur = java_get_entity_pos_x(&jvm, view);
+                    Vec3 prev = java_get_entity_prev_pos_x(&jvm, view);
+                    cam = vec3_lerp(prev, cur, (double)partial_ticks);
+                }
                 if (flag) {
                     gl_push_state(&jvm); gl_clear_color(&jvm); gl_disable_lighting(&jvm); gl_pop_state(&jvm);
                     gl_blend_mode(&jvm, 0x302, 0x303);
                 }
+                // Blend state is set before both passes, as the original did. It is kept
+                // outside the 3D test because the 2D pass needs blending too.
                 GlCap *dis = ptr_to_pGlDisable;
                 (*dis)(0xb71); (*dis)(0xde1); (*dis)(0xb50);
                 GlCap *en = ptr_to_pGlEnable;
                 (*en)(0xbe2);
                 (*ptr_to_pGlBlendFunc)(0x302, 0x303);
                 (*en)(0xb20);
-                if (!no3d) {
+                // The 3D pass needs a real player, world and view: without them there is
+                // nothing to place and the handlers would read NULL game objects.
+                if (!no3d && player && world && view) {
                     R3D e = {6, cam, &ctx, partial_ticks, flag, {}};
                     dispatch_event(java_natives_world_module_manager, (Event *)&e);
                 }

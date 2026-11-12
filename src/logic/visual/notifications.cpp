@@ -27,7 +27,7 @@ S(str_default_in_notifications);   // "Default"
 S(str_s_in_notifications);   // "%s"
 S(str_error_code_d);   // "Error code %d"
 extern "C" const char *const ptr_to_str_loaded_profile[2];   // "Loaded profile", "Saved profile"
-extern "C" char notifications_module_descriptor[];                 // GUI module descriptor
+extern "C" char gui_module_descriptor[];                           // GUI module descriptor (the one the hint belongs to)
 extern "C" unsigned char notifications_hide_flagged_hidden_modules, notifications_hide_flagged_hidden_modules_second;            // hide flagged / hidden modules
 extern "C" unsigned char notifications_per_category, notifications_per_category_second, notifications_per_category_third, notifications_per_category_fourth, notifications_per_category_fifth;   // per category
 extern "C" unsigned char notifications_gui_hint_shown;            // GUI hint shown
@@ -35,6 +35,8 @@ extern "C" Recent notifications_last_enabled;                   // last enabled
 extern "C" Recent notifications_last_disabled;                   // last disabled
 extern "C" int *const ptr_to_gui_module_descriptor;              // client config (+0x1c: GUI key)
 S(str_press_s_to_open_gui);
+static unsigned char notifications_hint_done;   // the bind hint has been offered this session
+
 S(str_enabled_in_notifications);   // "Enabled"
 S(str_disabled);   // "Disabled"
 S(str_s_u_mods);   // "%s %u mods"
@@ -69,6 +71,38 @@ extern "C" unsigned long long notifications_head;      // head
 // Message kinds (colour of the box): 0 profile (green), 1 info (accent colour), 2 error (red).
 enum { NOTE_PROFILE = 0, NOTE_INFO = 1, NOTE_ERROR = 2 };
 
+// Number of modules that will be on once the queued toggles run. Loading a profile only queues its
+// enables (queue_module_toggle appends to en_list, apply_module_toggles writes the flags on the next
+// frame), so counting the enabled flags alone right here reports the state from before the load.
+extern "C" char java_natives_world_module_manager[];
+struct MgrTables {
+    void **data; unsigned long long count;
+    char padding_10[0x2e8 - 0x10];
+    void **en_list; unsigned long long en_count;
+    void **dis_list; unsigned long long dis_count;
+};
+static bool holds(void **list, unsigned long long n, void *mod) {
+    for (unsigned long long i = 0; i < n; i++)
+        if (list[i] == mod) return true;
+    return false;
+}
+static unsigned long long count_enabled_modules() {
+    MgrTables *mgr = (MgrTables *)java_natives_world_module_manager;
+    unsigned long long n = 0;
+    if (!mgr->data)
+        return 0;
+    for (unsigned long long i = 0; i < mgr->count; i++) {
+        void *mod = mgr->data[i];
+        if (!mod)
+            continue;
+        bool on = *(unsigned char *)((char *)mod + 0x14) == 1;
+        if (holds(mgr->en_list, mgr->en_count, mod)) on = true;
+        if (holds(mgr->dis_list, mgr->dis_count, mod)) on = false;
+        if (on) n++;
+    }
+    return n;
+}
+
 // Add a message at the end of the ring buffer (dropping the oldest when full).
 static Note *push(int kind) {
     unsigned long long head = notifications_head, n = active_notification_count;
@@ -88,6 +122,14 @@ extern "C" void notifications_profile_loaded_saved(ProfileEvt *p) {
     unsigned st = p->status;
     if (st == 2)
         return;
+    // Loading a profile switches a set of modules on, so say how many ended up enabled before the
+    // profile line itself: the count is what you check first when a profile looks wrong. Saving
+    // changes nothing, so it only gets the one line.
+    if (st == 0) {
+        unsigned long long count = count_enabled_modules();
+        Note *mods = push(NOTE_INFO);
+        log_fmt(mods->text, 0x65, str_s_u_mods, str_enabled_in_notifications, count);
+    }
     const char *label = ptr_to_str_loaded_profile[st];
     const char *name = p->name ? p->name : str_default_in_notifications;
     Note *note = push(NOTE_PROFILE);
@@ -133,7 +175,7 @@ static bool announced(Module *module) {
 // Others are counted, and announced together on the next tick.
 extern "C" void notifications_module_toggled_gui(ToggleEvt *h) {
     Module *module = h->mod;
-    if ((void *)module == notifications_module_descriptor) {
+    if ((void *)module == gui_module_descriptor) {
         if (!h->on) {
             active_notification_count = 0;
             return;
@@ -159,6 +201,19 @@ extern "C" void notifications_tick_age_messages(TickHook *hook) {
         notifications_last_enabled.count = 0;
         notifications_last_disabled.count = 0;
         return;
+    }
+    // The key hint used to be pushed only when the GUI module was switched on, so a player who
+    // never opened the window never learned the bind. Announce it once per session on the first
+    // HUD tick instead. The main menu counts: the window opens with the same key there, and that
+    // is exactly where a player looks for it. notifications_gui_hint_shown keeps the other
+    // producer (the GUI toggle in notifications_module_toggled_gui) from showing it twice.
+    if (notifications_hint_done == 0) {
+        notifications_hint_done = 1;
+        unsigned char expected = 0;
+        if (__atomic_compare_exchange_n(&notifications_gui_hint_shown, &expected, 1, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            Note *hint = push(NOTE_INFO);
+            log_fmt(hint->text, 0x65, str_press_s_to_open_gui, mouse_button_name(ptr_to_gui_module_descriptor[0x1c / 4]));
+        }
     }
     unsigned long long n = active_notification_count;
     while (n) {

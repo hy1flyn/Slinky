@@ -60,12 +60,16 @@ FN(void, java_call_static_mouse_set_grabbed, (void *jvm, int x));
 FN(int, java_get_static_display_width, (void *jvm));
 FN(int, java_get_static_display_height, (void *jvm));
 FN(void, java_call_static_mouse_set_cursor_position, (void *jvm, int x, int y));
+FN(void, java_call_minecraft_set_ingame_focus, (void *jvm, void *minecraft));
 FN(double, time_now, ());
 FN(void, set_tab_animation, (void *state, double v));
 FN(unsigned char, is_in_game, (void *jvm, void *object));
+FN(void, set_in_game, (void *jvm, void *object, unsigned char value));
 FN(void, close_popup_now, (void *state));
 FN(void, reset_drag_state, (void *state));
 FN(int, save_settings, (void *module_manager, void *profile_list));   // 0 = ok, else an error code
+FN(unsigned char, get_profile_dirty, ());                             // 1 = unsaved changes
+FN(void, set_profile_dirty, (unsigned char v));
 FN(void, dispatch_event, (void *jvm, Notice *n));
 FN(V4, nvg_rgb_f, (float a, float b, float c));
 FN(void, draw_gui_frame, (void *state, void *event, void *other_object, void *y));
@@ -87,6 +91,14 @@ extern "C" unsigned char gui_handle_input_event(InputEvt *evt, unsigned char shi
         int code = evt->code;
         // The keybind opens / closes it; F11 closes it.
         if (!shift && code == gui_toggle_key) {
+            // Restart the open animation here, not only in gui_on_toggle: that handler runs from the
+            // toggle event, and apply_module_toggles defers those until a world and a player exist
+            // (module_manager.cpp, game_ready). On the main menu the window still opens, its handlers
+            // are wired and the frame loop runs, but the event never arrives, so card_open_progress
+            // kept the 1.0 it ended at last time and the window appeared without animating.
+            if (open != 1) {
+                set_tab_animation(gui_state_block, time_now());
+            }
             queue_module_toggle(module_manager, gui_module_descriptor, open ^ 1);
             return 1;
         }
@@ -109,10 +121,28 @@ extern "C" unsigned char gui_handle_input_event(InputEvt *evt, unsigned char shi
 }
 
 // While open: never let the game grab the mouse.
+//
+// Also the settings safety net. save_settings is otherwise only reached from gui_on_toggle when the
+// window closes, so a change made and then followed by a crash, a kill or an anticheat kick was lost
+// outright: the dirty flag stayed set but nothing ever wrote it. Every time this tick sees a dirty
+// profile it saves, at most once per SAVE_INTERVAL so dragging a slider does not write the file per
+// frame. The interval is a timeout measured on the frame clock, not a tick count, so it holds on any
+// framerate. gui_on_toggle still saves on close; that path is unchanged.
+static const double SAVE_INTERVAL = 2.0;    // seconds between background saves
 extern "C" void gui_on_tick(Hook *hook) {
     Ctx *ctx = hook->ctx;
     if (java_call_static_mouse_is_grabbed(ctx->jvm))
         java_call_static_mouse_set_grabbed(ctx->jvm, 0);
+
+    static double last_autosave;
+    if (!gui_shutting_down && get_profile_dirty()) {
+        double now = time_now();
+        if (now - last_autosave >= SAVE_INTERVAL) {
+            last_autosave = now;
+            if (!save_settings(ctx->module_manager, ctx->profile_list))
+                set_profile_dirty(0);          // written: the profile is clean again
+        }
+    }
 }
 
 extern "C" void gui_on_toggle(EvHook *hook) {
@@ -134,8 +164,12 @@ extern "C" void gui_on_toggle(EvHook *hook) {
     }
 
     // Closed: give the mouse back to the game and save the settings.
-    if (is_in_game(jvm, ctx->minecraft))
-        java_call_static_mouse_set_grabbed(ctx->jvm, 1);
+    // setIngameFocus is the right teardown, but its first branch is `if (inGameHasFocus) return;`
+    // (see ave.n() bytecode). Opening the window called only Mouse.setGrabbed(0), which leaves
+    // inGameHasFocus true, so the call returned immediately and never reached grabMouse(). Clearing
+    // the flag first makes it run the whole sequence: set the flag, grab the mouse, close the screen.
+    set_in_game(ctx->jvm, ctx->minecraft, 0);
+    java_call_minecraft_set_ingame_focus(ctx->jvm, ctx->minecraft);
     close_popup_now(gui_state_block);
     reset_drag_state(gui_state_block);
     if (gui_shutting_down)

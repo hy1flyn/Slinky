@@ -255,7 +255,7 @@ extern "C" jint java_get_c16_packet_client_status_status(Jvm *jvm, jobject c16_p
     return java_call_enum_ordinal(jvm, e);
 }
 
-// ---- JNI bridge functions found by the gap scan (no caller outside the virtualised init) ----
+// ---- JNI bridge functions ----
 extern "C" jobject java_call_static_ichat_component_serializer_json_to_component(Jvm *jvm, void *i_chat_component) {
     return JCALLN(jvm, CallStaticObjectMethod, ids->IChatComponent_Serializer, ids->IChatComponent_Serializer_jsonToComponent, i_chat_component);
 }
@@ -292,7 +292,7 @@ extern "C" jobject java_jni_is_instance_of_s3_fpacket_custom_payload(Jvm *jvm, j
     return JCALLN(jvm, IsInstanceOf, candidate, (jclass)ids->S3FPacketCustomPayload) ? candidate : nullptr;
 }
 
-// ---- functions the first gap scan missed (padding / tail-jump neighbours) ----
+// ---- more bridge functions ----
 extern "C" void java_set_s12_packet_entity_velocity_motion_x(Jvm *jvm, void *s12_packet_entity_velocity, int value) {
     JCALL(jvm, SetIntField, s12_packet_entity_velocity, ids->S12PacketEntityVelocity_motionX, value);
 }

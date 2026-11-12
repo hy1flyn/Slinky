@@ -1,4 +1,3 @@
-// helper functions (formerly address block; names inferred from behaviour).
 #include "slinky/engine.h"
 extern "C" int libc_strcmp(const char *left, const char *right);
 extern "C" unsigned char notifications_gui_hint_shown;

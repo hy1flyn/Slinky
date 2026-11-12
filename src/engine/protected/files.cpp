@@ -1,7 +1,4 @@
-// Readable reimplementations of protector-obfuscated engine functions (0x4c270 - 0x4cc40):
-// the timer and the profile-folder file helpers. In the image these call Windows through the protector's
-// encrypted import slots; the logic around those calls is intact and is reproduced here 1:1, the API behind
-// each slot is named from its arguments, the strings it uses and the error codes compared afterwards.
+// The timer and the profile-folder file helpers.
 //
 // Error codes (shared with the profile code in math/settings_store.cpp):
 //   0x3ec no user profile dir   0x3ed out of memory        0x3ee path too long
