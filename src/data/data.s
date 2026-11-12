@@ -7515,7 +7515,7 @@ active_notification_count:
 .zero 8
 .globl notification_queue
 notification_queue:
-.zero 1120
+.zero 1280
 .globl notifications_head
 notifications_head:
 .zero 8

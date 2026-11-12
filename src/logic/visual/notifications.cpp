@@ -17,7 +17,12 @@
 struct Module { const char *name; char padding_08[8]; int category; int padding_14; int flags; int padding_1c; unsigned char hidden; };
 struct ToggleEvt { char padding_00[0x10]; Module *mod; unsigned char on; };
 struct Recent { const char *name; int count; };
-struct Note { int kind; char text[0x68]; float age; };     // 0x70 bytes
+// r/g/b are the accent colour the message was posted with. Info messages used to read the live
+// accent while drawing, so every message still on screen recoloured itself the moment a profile
+// with a different accent was loaded: loading A then quickly B turned the logo of A's messages
+// into B's colour. The colour is copied in when the note is pushed and never read from the setting
+// again. The array grew with it (10 * 0x80 = 1280 bytes in data.s).
+struct Note { int kind; char text[0x68]; float age; float r, g, b; };     // 0x80 bytes
 struct ProfileEvt { char padding_00[8]; const char *name; unsigned status; };
 struct ErrorEvt { char padding_00[8]; int code; int padding_0c; const char *msg; };
 struct FriendEvt { char padding_00[8]; unsigned char added; };
@@ -109,6 +114,10 @@ static Note *push(int kind) {
     Note *note = &notification_queue[(n + head) % 10];
     note->kind = kind;
     note->age = 0;
+    Color accent = get_speed_pair();
+    note->r = accent.r;
+    note->g = accent.g;
+    note->b = accent.b;
     unsigned long long *slot = &active_notification_count, v = n;
     if (n == 10) {
         slot = &notifications_head;
@@ -282,7 +291,7 @@ extern "C" void notifications_draw_slide_boxes(DrawHook *hook) {
         Color c;
         switch (note->kind) {
         case 2: c = nvg_rgba_f(colour_level_0_866667_in_notifications, colour_level_0_278431_in_notifications, colour_level_0_278431_in_notifications, 1.0f); break;
-        case 1: { Color acc = get_speed_pair(); c = nvg_rgb_f(acc.r, acc.g, acc.b); break; }
+        case 1: c = nvg_rgb_f(note->r, note->g, note->b); break;
         case 0: c = nvg_rgba_f(colour_level_0_54902, colour_level_0_92549, colour_level_0_168627, 1.0f); break;
         default: c = nvg_rgba_f(colour_level_0_866667_in_notifications, colour_level_0_866667_in_notifications, colour_level_0_866667_in_notifications, 1.0f); break;
         }
