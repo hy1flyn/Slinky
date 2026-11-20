@@ -1,6 +1,7 @@
-
 # Slinky
-## build
+- Thanks for Skid Solutions Team!
+
+## How to build?
 
 ### Prerequisites
 
