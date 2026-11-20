@@ -11,7 +11,6 @@
 //   trajectories_render   every frame: draw the path and the hit box
 #include "slinky/engine.h"
 #include "slinky/jids.h"
-extern "C" void slinky_logf(const char *fmt, ...);
 
 struct Vec3 { double x, y, z; };
 struct Rot { float yaw, pitch; };
@@ -124,52 +123,48 @@ extern "C" void trajectories_tick(Hook *hook) {
     Ctx *ctx = hook->ctx;
     unsigned char pearl, thrown;
     int item_id = -1;
-    int why = 0;
-    static int last_why;
-    if (ctx->in_game != 1) { why = 1; goto none; }
-    if (is_silent_rotation_active()) { why = 2; goto none; }
-    if (java_get_game_settings_third_person_view(ctx->jvm, get_game_settings(ctx->jvm, ctx->minecraft))) { why = 3; goto none; }
+    if (ctx->in_game != 1) { goto none; }
+    if (is_silent_rotation_active()) { goto none; }
+    if (java_get_game_settings_third_person_view(ctx->jvm, get_game_settings(ctx->jvm, ctx->minecraft))) { goto none; }
     {
         void *stack = item_held_hotbar_slot(ctx->jvm, ctx->player);
-        if (!stack) { why = 4; goto none; }
+        if (!stack) { goto none; }
         item_id = java_call_static_item_get_id_from_item(ctx->jvm, stack);
         if (item_id == 0x170) {                      // ender pearl
-            if (trajectories_pearls != 1) { why = 5; goto none; }
+            if (trajectories_pearls != 1) { goto none; }
             trajectories_launch_power = 1.5f;
             trajectories_launch_power_second = 1.5f;
             trajectories_gravity = 0.03f;
             pearl = 1;
             thrown = 0;
         } else if (item_id == 0x14c || item_id == 0x158) {   // snowball, egg
-            if (trajectories_throwables != 1) { why = 6; goto none; }
+            if (trajectories_throwables != 1) { goto none; }
             trajectories_launch_power = 1.5f;
             trajectories_launch_power_second = 1.5f;
             trajectories_gravity = 0.03f;
             thrown = 1;
             pearl = 0;
         } else if (item_id == 0x105) {               // bow
-            if (trajectories_render_bow != 1) { why = 7; goto none; }
+            if (trajectories_render_bow != 1) { goto none; }
             trajectories_gravity = 0.05f;
             if (java_call_entity_player_is_using_item(ctx->jvm, ctx->player)) {
                 int used = java_get_entity_player_item_in_use_count(ctx->jvm, ctx->player);
                 float p = bow_power(72000 - used);
                 trajectories_launch_power_second = p;
-                if (p == 0.0f) { why = 10; goto none; }
+                if (p == 0.0f) { goto none; }
                 trajectories_launch_power = bow_power(71999 - used);
             } else {
-                if (trajectories_uncharged_bow != 1) { why = 8; goto none; }
+                if (trajectories_uncharged_bow != 1) { goto none; }
                 trajectories_launch_power = 3.0f;
                 trajectories_launch_power_second = 3.0f;
             }
             thrown = 1;
             pearl = 0;
         } else {
-            why = 9; goto none;
+            goto none;
         }
     }
     {
-        static int sim_logged;
-        if (!sim_logged) { sim_logged = 1; slinky_logf("traj: simulating item=%d pearl=%d thrown=%d", item_id, pearl, thrown); }
         Rot rot = get_entity_rotation(ctx->jvm, ctx->player);
         Vec3 position = java_get_entity_pos_x(ctx->jvm, ctx->player);
         Vec3 pt, vel;
@@ -233,19 +228,10 @@ extern "C" void trajectories_tick(Hook *hook) {
     }
     return;
 none:
-    if (why != last_why) {
-        last_why = why;
-        slinky_logf("traj: tick idle why=%d item=%d", why, item_id);
-    }
     trajectories_path_length = 0;
 }
 
 extern "C" void trajectories_render(RenderEvt *h) {
-    static int render_logged;
-    if (!render_logged) {
-        render_logged = 1;
-        slinky_logf("traj: first render call path=%d", trajectories_path_length);
-    }
     if (!trajectories_path_length)
         return;
     Ctx *ctx = h->ctx;

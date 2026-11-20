@@ -106,16 +106,6 @@ static void seed_rng() {
     if (!acc) init_table[0] = 0x9e3779b9;             // xoshiro must not be all zero
 }
 
-// ---- logging ----
-extern "C" void slinky_logf(const char *fmt, ...) {
-    char line[512];
-    va_list ap;
-    va_start(ap, fmt);
-    libc_vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
-    slinky_log_write(line);
-}
-
 // ---- JVM / JVMTI access ----
 enum { JNI_VERSION_8 = 0x00010008, JVMTI_VERSION_1_2 = 0x30010200 };
 static JNIEnv *attach(bool *attached) {
@@ -161,9 +151,7 @@ static int hooks_set(JNIEnv *env, bool enable) {
 // hooks cannot be removed, tearing the client down and unloading the DLL while the game keeps
 // calling into it is a guaranteed use-after-free (see the serialize_settings crash on unload).
 extern "C" int set_java_hooks(JNIEnv *env, int enable) {
-    int err = hooks_set(env, enable != 0);
-    if (err) slinky_logf(enable ? "Initialization failed: %u" : "Disabling hooks failed: %u", err);
-    return err;
+    return hooks_set(env, enable != 0);
 }
 // Called from the client thread once per frame. On Java 9+ the installer deliberately skips the
 // WorldClient retransform (Lunar/Badlion transformers can deadlock inside it while our ClassFileLoadHook
@@ -288,7 +276,6 @@ extern "C" int slinky_setup(void *self) {
         err = env ? setup(env) : ERR_NO_ENV;
         detach(attached);
     }
-    if (err) slinky_logf("Initialization failed: %u", err);
     return err;
 }
 
@@ -311,13 +298,11 @@ extern "C" int slinky_teardown(void) {
         // set_java_hooks(env, 0). Disarm here, before freeing anything, or the JVM keeps a callback into
         // the unloaded DLL (ClassFileLoadHook -> class_file_load_hook).
         if (!env || !g_jvmti) {
-            slinky_logf("teardown: class hooks are still installed but the JVMTI environment is gone; keeping the client loaded");
             detach(attached);
             return 0;
         }
         int hook_err = set_java_hooks(env, 0);
         if (hook_err) {
-            slinky_logf("teardown: class hooks are still installed (%d); keeping the client loaded", hook_err);
             detach(attached);
             return 0;
         }

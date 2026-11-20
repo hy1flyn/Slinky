@@ -158,32 +158,6 @@ bool IsLibraryLoaded(unsigned long pid, const std::string &library) {
     return false;
 }
 
-std::string NativeLogPath() {
-    char temp[MAX_PATH];
-    DWORD n = GetTempPathA(MAX_PATH, temp);
-    if (!n) return {};
-    std::string dir(temp, n);
-    if (!dir.empty() && dir.back() != '\\' && dir.back() != '/') dir += '\\';
-    // The client logs to %TEMP%\slinky-<pid>\slinky-native.log; the exact folder is
-    // per process, so the caller is pointed at the parent instead of a wrong file.
-    return dir + "slinky-<pid>\\slinky-native.log";
-}
-
-std::string NativeLogPathFor(unsigned long pid) {
-    // The native client appends every line to %TEMP%\slinky.log: src/platform/win/entry.cpp
-    // uses GetTempPathW + "slinky.log" with FILE_APPEND_DATA and no per-process folder.
-    // The earlier per-pid guess never existed on disk, so reading the startup status
-    // back always ended in the timeout. The pid stays in the signature because callers
-    // think in terms of a target; the file itself is shared.
-    (void)pid;
-    char temp[MAX_PATH];
-    DWORD n = GetTempPathA(MAX_PATH, temp);
-    if (!n) return {};
-    std::string dir(temp, n);
-    if (!dir.empty() && dir.back() != '\\' && dir.back() != '/') dir += '\\';
-    return dir + "slinky.log";
-}
-
 // ---- bundled client library ----
 // Resource 200 holds the client DLL, the same slot the reference launcher reads. A build
 // without the resource (or a Linux build) simply reports no bundled library and falls
@@ -206,26 +180,39 @@ std::string ExtractBundledLibrary(std::string &error) {
         return {};
     }
 
-    char temp[MAX_PATH];
-    DWORD temp_length = GetTempPathA(MAX_PATH, temp);
-    if (!temp_length || temp_length >= MAX_PATH) {
-        error = describe_error("Finding a temporary folder",
-                               temp_length ? ERROR_BUFFER_OVERFLOW : GetLastError());
+    char home[MAX_PATH];
+    DWORD home_length = GetEnvironmentVariableA("USERPROFILE", home, MAX_PATH);
+    if (!home_length || home_length >= MAX_PATH) {
+        error = describe_error("Finding the user folder",
+                               home_length ? ERROR_BUFFER_OVERFLOW : GetLastError());
         return {};
     }
-    // One folder per injector run, so two games can be served without their extracted
-    // copies colliding, and so a stale copy never gets loaded.
-    std::string directory = std::string(temp) + "slinky-" + std::to_string(GetCurrentProcessId());
+    // The client keeps its state in ~/.slinky, so the extracted DLL belongs there too:
+    // one stable place instead of a per-run folder under %TEMP% that outlives the run.
+    std::string root = std::string(home, home_length) + "\\.slinky";
+    std::string directory = root + "\\bin";
+    if (!CreateDirectoryA(root.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        error = describe_error("Creating the .slinky folder", GetLastError());
+        return {};
+    }
     if (!CreateDirectoryA(directory.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-        error = describe_error("Creating a temporary folder", GetLastError());
+        error = describe_error("Creating the .slinky\\bin folder", GetLastError());
         return {};
     }
 
     std::string path = directory + "\\SlinkyNative.dll";
+    SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_NORMAL);
     HANDLE file = CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                               FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) {
-        error = describe_error("Writing the bundled DLL", GetLastError());
+        DWORD open_error = GetLastError();
+        // A copy still mapped by a running game cannot be overwritten. That is not worth
+        // failing on: the mapped copy is the one that matters, so hand the path back.
+        if (open_error == ERROR_SHARING_VIOLATION || open_error == ERROR_ACCESS_DENIED) {
+            std::error_code ec;
+            if (std::filesystem::exists(path, ec)) return path;
+        }
+        error = describe_error("Writing the bundled DLL", open_error);
         return {};
     }
     DWORD written = 0;
@@ -237,14 +224,6 @@ std::string ExtractBundledLibrary(std::string &error) {
         return {};
     }
     return path;
-}
-
-std::streamoff NativeLogSize(unsigned long pid) {
-    std::string path = NativeLogPathFor(pid);
-    if (path.empty()) return 0;
-    std::error_code ec;
-    auto size = std::filesystem::file_size(path, ec);
-    return ec ? 0 : (std::streamoff)size;
 }
 
 std::vector<Process> ListProcesses() {
@@ -458,7 +437,7 @@ bool Inject(unsigned long pid, const std::string &library, const LogFn &log) {
                         }
                     }
                     if (!ok) {
-                        log("The DLL is not present in the game after the load attempt. See " + NativeLogPath());
+                        log("The DLL is not present in the game after the load attempt.");
                     }
                 } else {
                     // The loader thread may still be reading the remote path: keep it alive.

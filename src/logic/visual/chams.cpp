@@ -22,15 +22,8 @@ enum { GL_POLYGON_OFFSET_FILL = 0x8037 };
 // ---- game / engine functions ----
 FN(unsigned char, entity_flags_has, (void *jvm, void *entity, int mode));   // flags: 1/4 friend or teammate, 2 bot
 FN(void, java_jni_call_nonvirtual_renderer_living_entity_do_render, (void *jvm, void *object, void *other_object, double x, double d0, double d1, float f0, float f1));   // the original render
-extern "C" void slinky_logf(const char *fmt, ...);
 
 extern "C" void chams_render_living_entity(void *jvm, void *renderer, void *entity, double x, double y, double z, float yaw, float partial) {
-    static int logged;
-    if (!logged) {
-        logged = 1;
-        slinky_logf("chams: first render wrapper enabled=%d hide_friendlies=%d", (int)chams_module_enabled, (int)chams_hide_friendlies_value);
-    }
-
     // Off, or an entity we leave alone (bots; with "hide_friendlies" also friends/teammates: flags 7).
     if (chams_module_enabled != 1 || entity_flags_has(jvm, entity, chams_hide_friendlies_value * 5 + 2)) {
         java_jni_call_nonvirtual_renderer_living_entity_do_render(jvm, renderer, entity, x, y, z, yaw, partial);

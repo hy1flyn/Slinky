@@ -67,13 +67,11 @@ static int gui_init() {
     w->ig = nvgCreateGL3(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
     w->scale = 1.0f;
     if (!w->ig) {
-        slinky_logf("GUI setup failed (no NanoVG context)");
         libc_free(w);
         return 1;                                  // retry next frame
     }
     if (find_glfw_entrypoint((void **)w, 0, "Inter Medium", hooks_embedded_truetype_inter_medium_inter, 694511) ||
         find_glfw_entrypoint((void **)w, 1, "Inter Bold", hooks_embedded_truetype_inter_medium_inter_second, 715203)) {
-        slinky_logf("GUI setup failed (font load)");
         libc_free(w);                              // the NanoVG context has no safe delete entry point here
         return 2;                                  // permanent failure: do not leak a new context every frame
     }
@@ -81,9 +79,7 @@ static int gui_init() {
     // friends). The original start-up uploaded it and stored {image, 64, 64} at window+0x48/+0x4c/+0x50;
     // without it draw_texture used image 0 and every icon was a solid rectangle.
     int atlas = nvgCreateImageMem(w->ig, 0, (unsigned char *)hooks_64x64_gui_icon_atlas, 5129);
-    if (atlas <= 0) {
-        slinky_logf("GUI icon atlas failed to load");
-    } else {
+    if (atlas > 0) {
         w->tex = atlas;
         w->tw = 64.0f;
         w->th = 64.0f;

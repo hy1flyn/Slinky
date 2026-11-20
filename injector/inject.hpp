@@ -44,23 +44,11 @@ bool IsMinecraftProcess(unsigned long pid);
 // Used both to refuse a second injection and to confirm that one succeeded.
 bool IsLibraryLoaded(unsigned long pid, const std::string &library);
 
-// Resolves the path the client reports failures to, so a failed load can be explained.
-std::string NativeLogPath();
-
-// The log the native client appends to. It is shared by every process that loaded the
-// client, so a caller that wants only its own run must take the size first and read
-// from that offset.
-std::string NativeLogPathFor(unsigned long pid);
-
-// Current byte length of that log, or 0 when it does not exist yet. Reading the outcome
-// of one injection means starting at the size recorded immediately before injecting.
-std::streamoff NativeLogSize(unsigned long pid);
-
 // True when this build carries a client library inside the executable.
 bool HasBundledLibrary();
 
-// Writes the bundled client library to a temporary folder and returns its path, or an
-// empty string when this build has none or it could not be written. This is what lets
+// Writes the bundled client library to ~/.slinky/bin and returns its path, or an empty
+// string when this build has none or it could not be written. This is what lets
 // the injector ship as a single file: the DLL never has to sit beside the .exe.
 std::string ExtractBundledLibrary(std::string &error);
 

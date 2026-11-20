@@ -3,7 +3,6 @@
 #include "slinky/jids.h"
 extern "C" JIds *java_natives_world_cached_jni_ids;
 extern "C" unsigned char java_natives_frame_client_shutting_down_natives_check;   // set by the unload sequence: every entry below is inert once it is 1
-extern "C" void slinky_logf(const char *fmt, ...);
 struct Rot { float yaw, pitch; };
 FN(unsigned char, is_silent_rotation_active, ());
 FN(double, time_now, ());
@@ -25,11 +24,6 @@ extern "C" void *hook_can_render_name(JNIEnv *env, jclass, void *receiver, void 
 }
 extern "C" void hook_render_player(JNIEnv *env, jclass, void *receiver, void *b, double x, double d0, double d1, float f0, float f1) {
     if (java_natives_frame_client_shutting_down_natives_check) return;
-    static int logged;
-    if (!logged) {
-        logged = 1;
-        slinky_logf("frame: first render_player");
-    }
     Jvm jvm = {java_natives_world_cached_jni_ids, env};
     chams_render_living_entity_entry(&jvm, receiver, b, x, d0, d1, f0, f1);
 }
@@ -155,11 +149,6 @@ extern "C" void hook_update_entities(JNIEnv *env, jclass, void *receiver) {
     ctx.in_game = ptr_to_gui_module_descriptor[0x14] ? 0 : is_in_game(&jvm, minecraft);
     *(int *)&ctx.padding_41[0] = 0;
     ctx.padding_44 = 0;
-    static int entities_logged;
-    if (!entities_logged) {
-        entities_logged = 1;
-        slinky_logf("frame: first update_entities in_game=%d gui_open=%d", (int)ctx.in_game, (int)ptr_to_gui_module_descriptor[0x14]);
-    }
     HEvent e = {};
     e.type = 0x10;
     e.ctx = &ctx;
@@ -307,11 +296,6 @@ extern "C" void render_world_events(JNIEnv *env, unsigned mask, unsigned char fl
 
     if (java_natives_frame_client_shutting_down_natives_check) return;
     if (!frame_render_target) return;
-    static int events_logged;
-    if (!events_logged) {
-        events_logged = 1;
-        slinky_logf("frame: first post_world_clear mask=%x flag=%d target=%p", mask, (int)flag, frame_render_target);
-    }
     if (mask & 0x100) {
         Jvm jvm = {java_natives_world_cached_jni_ids, env};
         void *minecraft = get_minecraft(&jvm);
@@ -324,19 +308,6 @@ extern "C" void render_world_events(JNIEnv *env, unsigned mask, unsigned char fl
         if (!(no3d & no2d)) {
             void *world = get_world(&jvm, minecraft);
             void *view = get_render_view_entity(&jvm, minecraft);
-            // Logged while diagnosing the HUD on the main menu: the 2D pass needs to know
-            // whether the render view exists there. Rate limited to once a second so the
-            // log stays readable.
-            {
-                static double last_log;
-                double now = time_now();
-                if (now - last_log >= 1.0) {
-                    last_log = now;
-                    slinky_logf("worldrender: mask=%x no3d=%d no2d=%d player=%p world=%p view=%p in_game=%d",
-                                mask, (int)no3d, (int)no2d, player, world, view,
-                                (int)(ptr_to_gui_module_descriptor[0x14] ? 0 : is_in_game(&jvm, minecraft)));
-                }
-            }
             // The 2D pass (module list, notifications, "Press X to open GUI") also runs on the
             // main menu and the pause screen, where player/world/view are all NULL. Only the 3D
             // pass needs them. The context is therefore built whenever the game object exists,

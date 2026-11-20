@@ -149,7 +149,6 @@ extern "C" unsigned char classfile_hooks_1_while_hooks_are_installed;         //
 extern "C" unsigned char classfile_hooks_world_client_pending = 0;             // WorldClient retransform skipped at install on Java 9+
 extern "C" unsigned char classfile_hooks_world_client_patched = 0;             // ... and has since been applied
 extern "C" unsigned char java_natives_frame_client_shutting_down_natives_check; // the client is unloading: the transformer must go inert
-extern "C" void slinky_logf(const char *fmt, ...);
 static unsigned char g_disarming;             // 1 while remove_class_hooks restores the original bytecode (atomic)
 extern "C" HookCls hooked_class_minecraft, hooked_class_entity_renderer, hooked_class_render_manager, hooked_class_renderer_living_entity, hooked_class_render_player,
     hooked_class_net_handler_play_client, hooked_class_world_client, hooked_class_entity, hooked_class_entity_living_base;
@@ -167,7 +166,6 @@ typedef int (*JvmtiAllocate)(JvmtiEnv_ **, long long, unsigned char **);
 
 // method matcher passed to the class rewriter: (-1,-1) entries match everything
 extern "C" int match_method(HookTab *t, MethodKey *k, void **outFn, MethodPat **outPat) {
-    static int pat_logs;
     for (unsigned long long i = 0; i < t->n; i++) {
         MethodPat *p = &t->pats[i * 2];
         if (p->a == -1 && p->b == -1) {
@@ -176,9 +174,7 @@ extern "C" int match_method(HookTab *t, MethodKey *k, void **outFn, MethodPat **
             break;
         }
         unsigned long long na = (unsigned long long)p->a, da = (unsigned long long)p->b;
-        if (pat_logs < 12) { pat_logs++; slinky_logf("patcmp: i=%llu name=%p desc=%p", i, p->a, p->b); }
         if (na < 0x10000 || da < 0x10000) {
-            slinky_logf("patcmp: bad pattern name=%llx desc=%llx (skipped)", na, da);
             continue;
         }
         if (compare_member_name(*k, *p)) {
@@ -210,16 +206,12 @@ extern "C" void class_file_load_hook(JvmtiEnv_ **jvmti, JNIEnv *env, jclass rede
 #undef TRY
     return;
 found:
-    slinky_logf("classhook-seen: %s", name ? name : "?");
     unsigned char *buf = nullptr;
     int outLen;
     __atomic_store_n(&classfile_hooks_sites_rewritten, 0, __ATOMIC_RELAXED);
     int err = rewrite_class_file(data, len, &buf, &outLen, str_slinkyhooks13, pctx->data, pctx->len, (void *)match_method, pctx);
     long sites = __atomic_load_n(&classfile_hooks_sites_rewritten, __ATOMIC_RELAXED);
-    if (err == 0)
-        slinky_logf("classhook: %s sites=%ld %d->%d", name ? name : "?", sites, len, outLen);
-    else
-        slinky_logf("classhook: %s sites=%ld err=%d", name ? name : "?", sites, err);
+    (void)sites;
     if (err == 0) {
         unsigned char *mem = nullptr;
         JvmtiAllocate alloc = (JvmtiAllocate)(*jvmti)->fn[45];
@@ -277,11 +269,8 @@ extern "C" int retransform_pending_world_client(void *jvmti_env) {
     if (!one) return 12000 + 49 /* JVMTI_ERROR_NOT_AVAILABLE */;
     JvmtiTable **jvmti = (JvmtiTable **)jvmti_env;
     int transform_error = JVMTI(jvmti, 151, JvmtiRetransform)(jvmti, 1, &one);
-    if (transform_error) {
-        slinky_logf("classhooks: deferred WorldClient retransform err=%d", transform_error);
-    } else {
+    if (!transform_error) {
         __atomic_store_n(&classfile_hooks_world_client_patched, 1, __ATOMIC_SEQ_CST);
-        slinky_logf("classhooks: deferred WorldClient retransform ok");
     }
     return transform_error;
 }
@@ -337,7 +326,6 @@ out:
     if (!err) __atomic_store_n(&classfile_hooks_world_client_pending, 0, __ATOMIC_SEQ_CST);
     // A failed step leaves the client resident (the unload sequence cancels on errors): re-arm the flag
     // so the next click gets a whole new pass. Retransform is idempotent, so resuming is safe.
-    slinky_logf("disarm: err=%d", err);
     if (err) __sync_bool_compare_and_swap(&classfile_hooks_1_while_hooks_are_installed, 0, 1);
     return err;
 }
@@ -385,10 +373,7 @@ extern "C" int rewrite_instruction(HookTable *t, CP *cp, RBuf22 *in, WBuf22 *out
         if (h->kind != kind) continue;
         if (compare_utf8_local(ref.cls, h->cls) != 0) continue;
         unsigned long long np = (unsigned long long)h->name, dp = (unsigned long long)h->desc;
-        static int site_logs;
-        if (site_logs < 30) { site_logs++; slinky_logf("sitecmp: cls=%s kind=%d name=%p desc=%p", h->cls, h->kind, h->name, h->desc); }
         if (np < 0x10000 || dp < 0x10000) {
-            slinky_logf("sitecmp: bad site name=%llx desc=%llx (skipped)", np, dp);
             continue;
         }
         if (!compare_member_name_local(ref.nt, MemberName{h->name, h->desc})) continue;

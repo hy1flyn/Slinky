@@ -193,14 +193,10 @@ extern "C" void post_synthetic_click(bool left, bool down) {
 
 // ---- unload: a thread waits a second (so the hooks have returned) then frees the DLL ----
 extern "C" DWORD unload_thread(LPVOID module) {
-    slinky_logf("unload thread: waiting for the hooks to be out");
     Sleep(1000);
-    slinky_logf("unload thread: teardown");
     if (!slinky_teardown()) {   // release what start-up built (init.cpp), then the DLL itself
-        slinky_logf("unload thread: teardown aborted, hooks are still live; keeping the client loaded");
         return 0;
     }
-    slinky_logf("unload thread: FreeLibrary");
     FreeLibraryAndExitThread((HMODULE)module, 0);
     return 0;
 }

@@ -214,121 +214,59 @@ void print_list(const std::vector<Injector::Process> &processes) {    // On Wind
         std::cout << "\n" << "No process has LWJGL loaded: Minecraft is not running, or it is still starting.\n";
 }
 
-// ---- startup status, read from the client's own log ----
-// A DLL can load into the game and still fail to bootstrap, so the outcome is taken
-// from the lines the native client writes to %TEMP%\slinky.log instead of from the
-// injection call alone. The markers are the client's own, from its source:
-//   hook_installer.cpp      "classhooks: installed, hook stays enabled, first_error=%d"
-//                           "classhooks: install called with bad jvm=%p"
-//   init.cpp                "Initialization failed: %u"
-//   hooks.cpp               "GUI setup failed (no NanoVG context)" / "(font load)"
-//   java_natives_frame.cpp  "unload: starting unload thread"
-// The reference launcher's "FINAL STATUS:" lines belong to the Java client and are
-// never written here, so they are not matched.
-enum class StartupStatus { Waiting, Running, AlreadyRunning, Failed, Reloaded };
+// ---- startup status, read from the loader ----
+// The client DLL is mapped by LoadLibraryW before its start-up thread runs, and it takes
+// itself back out (FreeLibraryAndExitThread) when setup fails. So a copy that stays mapped
+// is a client that started, and one that disappears again is a client that failed. This
+// needs no log at all, which is the point: the client writes nothing to disk.
+enum class StartupStatus { Waiting, Running, Failed };
 
-StartupStatus status_from_line(const std::string &line) {
-    // A deliberate unload is a clean end rather than a failure, and it happens after a
-    // successful start, so it is reported separately.
-    if (line.find("unload: starting unload thread") != std::string::npos) return StartupStatus::Reloaded;
-    if (line.find("Initialization failed:") != std::string::npos ||
-        line.find("classhooks: install called with bad jvm") != std::string::npos ||
-        line.find("GUI setup failed") != std::string::npos)
-        return StartupStatus::Failed;
-    // Hooks staying enabled with no error is the point where the client is actually
-    // live: every line before it can still be rolled back.
-    if (line.find("classhooks: installed, hook stays enabled") != std::string::npos) return StartupStatus::Running;
-    return StartupStatus::Waiting;
-}
-
-// Polls the log for the final status, with the mascot still walking. Returns true only
-// when the client confirmed it started. `process_closed` is set when the game exits
-// before any status arrived, which the reference reports on its own page.
+// Polls the module list for the outcome, with the mascot still walking. Returns true only
+// when the client stayed mapped. `process_closed` is set when the game exits first.
 bool wait_for_startup(Tui::Screen &screen, unsigned long pid, StartupStatus &status, bool &process_closed,
-                      std::streamoff start_offset) {
+                      const std::string &library) {
     process_closed = false;
-    const std::string path = Injector::NativeLogPathFor(pid);
-    // Only lines written after the injection count. The log is shared by every process
-    // that ever loaded the client, so an older "classhooks: installed" line from a
-    // previous session would otherwise be read as this injection's success.
-    std::streamoff offset = start_offset;
-    std::string pending;
     status = StartupStatus::Waiting;
     auto began = std::chrono::steady_clock::now();
-
-    auto consume = [&](const std::string &line) {
-        StartupStatus next = status_from_line(line);
-        if (next == StartupStatus::Waiting) return;
-        // A failure is final: a later "installed" line cannot undo it. A success is kept
-        // unless a failure already arrived, so the first real verdict wins.
-        if (status == StartupStatus::Waiting) status = next;
-        else if (next == StartupStatus::Failed) status = next;
-    };
+    std::chrono::steady_clock::time_point mapped_at{};
+    bool ever_mapped = false;
+    // Time the start-up thread gets to fail and unload before the load counts as good.
+    const auto settle = std::chrono::milliseconds(2000);
 
     // 250 s, the reference's ceiling.
-    std::chrono::steady_clock::time_point settled_at{};
-    bool have_settled_at = false;
-
     while (!g_cancelled.load() && std::chrono::steady_clock::now() - began < std::chrono::seconds(250)) {
-        {
-            std::ifstream in(path, std::ios::binary);
-            if (in) {
-                in.seekg(0, std::ios::end);
-                std::streamoff size = in.tellg();
-                if (size >= 0 && size < offset) {        // the log was recreated
-                    offset = 0;
-                    pending.clear();
-                    status = StartupStatus::Waiting;
-                    have_settled_at = false;
-                }
-                in.seekg(offset, std::ios::beg);
-                std::string chunk((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-                offset += (std::streamoff)chunk.size();
-                pending += chunk;
-                size_t newline;
-                while ((newline = pending.find('\n')) != std::string::npos) {
-                    std::string line = pending.substr(0, newline + 1);
-                    pending.erase(0, newline + 1);
-                    if (line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);   // BOM
-                    consume(line);
-                }
-            }
-        }
-
-        if (status != StartupStatus::Waiting) {
-            if (!have_settled_at) {
-                have_settled_at = true;
-                settled_at = std::chrono::steady_clock::now();
-            }
-            // The client writes several lines around startup, and a failure can follow
-            // the success line, so a verdict is held for half a second to let the rest
-            // of the burst arrive before the page is drawn.
-            if (std::chrono::steady_clock::now() - settled_at >= std::chrono::milliseconds(500)) break;
-        } else if (!has_thread(pid)) {
-            // The game went away before saying anything: reported on its own page rather
-            // than waiting out the full timeout.
+        if (!has_thread(pid)) {
+            // The game went away: reported on its own page rather than waiting out the
+            // full timeout.
             process_closed = true;
+            break;
+        }
+        if (Injector::IsLibraryLoaded(pid, library)) {
+            if (!ever_mapped) {
+                ever_mapped = true;
+                mapped_at = std::chrono::steady_clock::now();
+            } else if (std::chrono::steady_clock::now() - mapped_at >= settle) {
+                status = StartupStatus::Running;
+                break;
+            }
+        } else if (ever_mapped || std::chrono::steady_clock::now() - began >= std::chrono::seconds(1)) {
+            // Mapped and gone, or never seen after a successful load call: the client
+            // took itself back out, so setup failed.
+            status = StartupStatus::Failed;
             break;
         }
         if (screen.Animated()) screen.RepaintMascot();
         sleep_ms(150);
     }
-    if (!pending.empty()) consume(pending);
-    return status == StartupStatus::Running || status == StartupStatus::Reloaded;
+    return status == StartupStatus::Running;
 }
-// Page shown once the log reports an outcome.
+// Page shown once the loader reports an outcome.
 void report_status(Tui::Screen &screen, StartupStatus status) {
     screen.NewPage();
     switch (status) {
     case StartupStatus::Running:
-    case StartupStatus::Reloaded:
         screen.Section("DONE");
         screen.Emit(Tui::green(), "loaded successfully.");
-        break;
-    case StartupStatus::AlreadyRunning:
-        screen.Section("SKIPPED");
-        screen.Emit(Tui::yellow(), "Slinky is already active in this game.");
-        screen.Emit(Tui::white(), "Unload it from the Slinky menu, then run Slinky again.");
         break;
     case StartupStatus::Failed:
         screen.SetFailed(true);
@@ -526,10 +464,6 @@ int main(int argc, char **argv) {
     std::atomic<bool> done{false};
     std::atomic<bool> injected{false};
 
-    // The log is shared, so the position is taken before the injection starts and only
-    // what is appended afterwards is read as this run's outcome.
-    std::streamoff log_start = Injector::NativeLogSize(target.pid);
-
     std::thread worker([&]() {
         bool ok = Injector::Inject(target.pid, options.library, [&](const std::string &line) {
             std::lock_guard<std::mutex> lock(log_mutex);
@@ -559,11 +493,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // ---- confirm through the client's own log, as the reference does ----
+    // ---- confirm through the loader: a client that stays mapped has started ----
     if (interactive) {
         StartupStatus status = StartupStatus::Waiting;
         bool process_closed = false;
-        bool confirmed = wait_for_startup(screen, target.pid, status, process_closed, log_start);
+        bool confirmed = wait_for_startup(screen, target.pid, status, process_closed, options.library);
 
         if (confirmed) {
             // The dog holds a still frame now that the outcome is known, and the
@@ -587,20 +521,14 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        if (status == StartupStatus::AlreadyRunning) {
-            report_status(screen, status);
-            screen.WaitForDismissal();
-            return 2;
-        }
         if (status == StartupStatus::Failed) {
             report_status(screen, status);
             screen.WaitForDismissal();
             return 1;
         }
 
-        // No status line ever arrived: the reference shows STOPPED when the user
-        // interrupted and TIMEOUT when the wait simply ran out, and keeps the log path
-        // on screen so the reason can still be found.
+        // The wait ran out without the client staying mapped: STOPPED when the user
+        // interrupted, TIMEOUT when it simply ran out.
         screen.SetFailed(true);
         screen.NewPage();
         if (g_cancelled.load()) {
@@ -610,7 +538,6 @@ int main(int argc, char **argv) {
             screen.Section("TIMEOUT", Tui::yellow());
             screen.Emit(Tui::yellow(), "Slinky never confirmed it finished starting.");
         }
-        screen.Detail("Keep the log", Injector::NativeLogPathFor(target.pid), Tui::dim());
         screen.FlushPage();
         screen.WaitForDismissal();
         return 1;

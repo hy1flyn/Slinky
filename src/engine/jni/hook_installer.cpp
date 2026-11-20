@@ -6,8 +6,6 @@
 #include "slinky/jnienv.h"
 #include "slinky/jids.h"
 FN(void *, libc_memcpy_alt, (void *dest, const void *src, unsigned long long n));
-extern "C" void slinky_logf(const char *fmt, ...);
-static inline const char *cs(const void *p) { return p ? (const char *)p : "?"; }
 extern "C" char hook_native_pointer_table[];
 // Copies the 23 native pointers to hook_native_pointer_table (the original installer read them back from there; this
 // implementation takes them from kNatives, so nothing calls this any more)
@@ -107,10 +105,8 @@ static bool java9_or_newer(JNIEnv *env) {
 // Install the hooks: 0 or an error (JNI/loader errors as the client defines them, 12000 + jvmtiError)
 extern "C" int install_class_hooks(Jvm *jvm, JvmtiTable **jvmti) {
     if (!jvm || !jvm->ids) {
-        slinky_logf("classhooks: install called with bad jvm=%p ids=%p", jvm, jvm ? jvm->ids : 0);
         return 0x7d0;
     }
-    slinky_logf("classhooks: install jvm=%p ids=%p env=%p jvmti=%p installed=%d", jvm, jvm->ids, jvm->env, jvmti, (int)classfile_hooks_1_while_hooks_are_installed);
     if (classfile_hooks_1_while_hooks_are_installed) return 0;
     JNIEnv *env = jvm->env;
     JIds *ids = jvm->ids;
@@ -135,13 +131,6 @@ extern "C" int install_class_hooks(Jvm *jvm, JvmtiTable **jvmti) {
     if ((err = JVMTI(jvmti, SET_EVENT_NOTIFICATION_MODE, SetEventMode)(jvmti, JVMTI_ENABLE, EV_CLASS_FILE_LOAD_HOOK, 0)))
         return JVMTI_ERROR_BASE + err;
 
-    slinky_logf("classhooks: variant=%d names=%d canRenderName=%s%s doRender=%s%s playerDoRender=%s%s",
-                (int)ids->variant, (int)ids->names,
-                cs(ids->RendererLivingEntity_canRenderNameMethodName), cs(ids->RendererLivingEntity_canRenderNameMethodSignature),
-                cs(ids->RendererLivingEntity_doRenderMethodName), cs(ids->RendererLivingEntity_doRenderMethodSignature),
-                cs(ids->RenderArrow_doRenderMethodName), cs(ids->RenderArrow_doRenderMethodSignature));
-    for (unsigned long long k = 0; k < g_nents; k++)
-        slinky_logf("ent[%llu] owner=%s kind=%d name=%p desc=%p", k, g_ents[k].owner, (int)g_ents[k].kind, (void *)g_ents[k].name, (void *)g_ents[k].desc);
     __atomic_exchange_n(&classfile_hooks_first_error, 0, __ATOMIC_SEQ_CST);
     // Retransform one class at a time: classes the game has not loaded yet make the
     // all-at-once call fail, and they will be patched later by the still-enabled
@@ -152,25 +141,19 @@ extern "C" int install_class_hooks(Jvm *jvm, JvmtiTable **jvmti) {
     // the installer completes and the client stays responsive. The
     // ClassFileLoadHook remains enabled for classes loaded later.
     const bool java9plus = java9_or_newer(env);
-    if (java9plus)
-        slinky_logf("classhooks: Java 9+ detected; skipping WorldClient retransform");
     for (int i = 0; i < 9; i++) {
         jclass one = hooked_class_minecraft[i].cls;
-        slinky_logf("classhooks: retransform[%d]=%p", i, one);
         if (!one) continue;
         if (java9plus && i == 6) {
-            slinky_logf("classhooks: retransform[%d] skipped on Java 9+ (deferred)", i);
             __atomic_store_n(&classfile_hooks_world_client_pending, 1, __ATOMIC_SEQ_CST);
             continue;
         }
         err = JVMTI(jvmti, RETRANSFORM_CLASSES, Retransform)(jvmti, 1, &one);
-        slinky_logf("classhooks: retransform[%d] err=%d first_error=%d", i, err, classfile_hooks_first_error);
         if (err) __sync_val_compare_and_swap(&classfile_hooks_first_error, 0, JVMTI_ERROR_BASE + err);
     }
     if (classfile_hooks_first_error) __atomic_store_n(&classfile_hooks_world_client_pending, 0, __ATOMIC_SEQ_CST);
     __atomic_exchange_n(&classfile_hooks_1_while_hooks_are_installed, 1, __ATOMIC_SEQ_CST);
     // Keep the ClassFileLoadHook enabled: classes that were not loaded yet (RenderPlayer,
     // WorldClient, ...) are only retransformed when the game loads them after joining a world.
-    slinky_logf("classhooks: installed, hook stays enabled, first_error=%d", classfile_hooks_first_error);
     return classfile_hooks_first_error;
 }

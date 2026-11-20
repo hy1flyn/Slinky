@@ -86,7 +86,6 @@ FN(void, nvg_Fill, (void *nvg));
 FN(void, nvg_RoundedRectVarying, (void *nvg, float x, float y, float w, float h, int a, int b, int c, float rounding));
 FN(float, nvg_text, (void *nvg, float x, float y, const char *text, void *end));
 FN(double, time_now, ());
-extern "C" void slinky_logf(const char *fmt, ...);
 
 static inline __attribute__((always_inline)) char lower(char ch) {
     return ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch;

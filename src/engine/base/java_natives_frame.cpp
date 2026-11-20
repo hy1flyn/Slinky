@@ -2,7 +2,6 @@
 #include "slinky/engine.h"
 #include "slinky/jids.h"
 extern "C" JIds *java_natives_world_cached_jni_ids;
-extern "C" void slinky_logf(const char *fmt, ...);
 extern "C" char *ptr_to_frame_module_settings;   // -> module settings block
 FN(void, render_world_events, (JNIEnv *env, int key, bool down));
 FN(void, tick_rotation, (Jvm *jvm));
@@ -285,15 +284,12 @@ extern "C" void hook_update_display(JNIEnv *env) {
     // either: everything the game still reaches goes inert the moment this branch commits.
     Pair16 p = init_slinkychannelhandler_class_constructor;
     int channel_off = p.a ? unregister_channel_class(&jvm, &p) : 0;
-    slinky_logf("unload: channel-off=%d", channel_off);
     // 0x3fd means there is no live network pipeline; there is nothing to remove in that case.
     if (channel_off && channel_off != 0x3fd) return;
     int hoff = set_java_hooks(env, 0);
-    slinky_logf("unload: hooks-off=%d", hoff);
     if (hoff) return;
     // unload: save settings, notify and disable every module, tear down
     int saved = save_settings(java_natives_world_module_manager, init_profile_list);
-    slinky_logf("unload: settings saved=%d", saved);
     HEvent e3 = {};
     e3.type = 0x1a;
     e3.ctx = &ctx;
@@ -307,7 +303,6 @@ extern "C" void hook_update_display(JNIEnv *env) {
     apply_module_toggles(&ctx);
     tick_post_frame(&ctx, java_natives_frame_module_manager_target_state);
     restore_game_window();
-    slinky_logf("unload: starting unload thread");
     start_unload_thread(init_our_module_handle);
 }
 
