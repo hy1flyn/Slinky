@@ -374,6 +374,9 @@ extern "C" void set_render_scale(Rend *renderer, float scale) {
 }
 // (re)create the framebuffer when the window size changed
 extern "C" bool resize_render_target(Rend *renderer, int w, int h) {
+    // A minimized window reports 0x0; building an empty framebuffer here made the next
+    // draw pass hit invalid dimensions, so an impossible size simply keeps the old one.
+    if (w <= 0 || h <= 0) return false;
     bool changed;
     if (w == renderer->w && h == renderer->h) {
         changed = false;

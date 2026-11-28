@@ -129,6 +129,16 @@ extern "C" void hook_click_mouse(JNIEnv *env, jclass, void *minecraft) {
     e.type = 0xf;
     dispatch_event(java_natives_world_module_manager, &e);
 }
+// ---- Item Use Fix wiring ----
+// Vanilla skips the whole right-click while the controller reports "hitting a block"
+// (mining/attacking). With an auto-clicker held down that is most of the time, so the
+// right click -- opening a shop, placing, eating -- was swallowed. The module's callbacks
+// exist (item_use_fix.cpp) but were never wired into this path; the layout below matches
+// the UseState the callbacks expect.
+struct IufState { char padding[8]; HCtx *ctx; unsigned char skip; };
+extern "C" void item_use_fix_clear_hitting_block(IufState *s);
+extern "C" void item_use_fix_restore_hitting_block(IufState *s);
+
 extern "C" void hook_right_click_mouse(JNIEnv *env, jclass, void *minecraft) {
     if (java_natives_frame_client_shutting_down_natives_check) return;
     Jvm jvm = {java_natives_world_cached_jni_ids, env};
@@ -138,11 +148,19 @@ extern "C" void hook_right_click_mouse(JNIEnv *env, jclass, void *minecraft) {
     e.type = 0xe;
     e.ctx = &ctx;
 
+    IufState iuf = {};
+    iuf.ctx = &ctx;
+    item_use_fix_clear_hitting_block(&iuf);
+
     e.cancel = 0;
     dispatch_event(java_natives_world_module_manager, &e);
     tick_click(&ctx);
-    if (e.cancel) return;
+    if (e.cancel) {
+        item_use_fix_restore_hitting_block(&iuf);
+        return;
+    }
     java_call_minecraft_right_click_mouse(&jvm, minecraft);
+    item_use_fix_restore_hitting_block(&iuf);
     e.type = 0xf;
     dispatch_event(java_natives_world_module_manager, &e);
     tick_click_done(&ctx);
@@ -193,8 +211,31 @@ struct ModEnt { char padding_00[0x1e8]; void (*on_shutdown)(HEvent *); };
 struct Mgr { ModEnt **data; unsigned long long count; };
 struct GuiEvent { int type; int padding_04; HCtx *ctx; int flags; float dt; char rest[0x30]; };
 struct GuiEvent2 { long long type; HCtx *ctx; void *gui; float dt; char rest[0x2c]; };
+#ifdef _WIN32
+#include "slinky/win32.h"
+#else
+#include <sched.h>
+static inline void thread_yield(void) { sched_yield(); }
+#endif
 static inline __attribute__((always_inline)) void spin_lock() {
-    while (__atomic_exchange_n(&frame_spinlock, 1, __ATOMIC_SEQ_CST)) __builtin_ia32_pause();
+    // A plain pause-loop lets whichever thread holds frame_spinlock starve the waiter for
+    // as long as it likes: while the GUI is open a handler can spend a long time inside
+    // the lock (settings save, module callbacks), and a waiter spinning at full speed on
+    // another core was part of the multi-second freezes. After a short pause burst the
+    // waiter gives the core up, so the owner always finishes.
+    unsigned spins = 0;
+    while (__atomic_exchange_n(&frame_spinlock, 1, __ATOMIC_SEQ_CST)) {
+        if (++spins < 4096) {
+            __builtin_ia32_pause();
+#ifdef _WIN32
+        } else {
+            Sleep(1);
+#else
+        } else {
+            thread_yield();
+#endif
+        }
+    }
 }
 extern "C" void hook_update_display(JNIEnv *env) {
     if (java_natives_frame_client_shutting_down_natives_check) return;   // the client is shutting down; this frame must not touch anything the
@@ -225,50 +266,61 @@ extern "C" void hook_update_display(JNIEnv *env) {
     int H = display_height(&jvm);
     if (0.0 > frame_start_time) frame_start_time = now;
 
-    if (frame_render_target && !is_event_handled(java_natives_world_module_manager, 0xa)) {
-        render_target_width = W;
-        render_target_height = H;
-        if (resize_render_target(frame_render_target, W, H)) {
-            frame_resize_cooldown = 0xa;
-        } else if (frame_resize_cooldown > 0) {
-            frame_resize_cooldown = frame_resize_cooldown - 1;
-        }
-        void *gui = frame_render_target;
-        set_render_scale(gui, gui_get_scale_entry());
-        double dt = now - frame_start_time;
-        if (dt > threshold_0_00833333) {
-            float fdt = (float)dt;
-            GuiEvent e = {};
-            e.type = 9;
-            e.ctx = &ctx;
-            e.dt = fdt;
-            dispatch_event(java_natives_world_module_manager, (HEvent *)&e);
-            int flags = e.flags;
-            frame_input_flag = flags & 1;
-
-            if (flags & 1) {
-                if ((flags & 2) || frame_repass_needed || frame_resize_cooldown > 0) {
-                    unsigned char again = (unsigned)(flags & 2) >> 1;
-                    (*ptr_to_pGlPushAttrib)(0xffffffff);
-                    begin_frame_framebuffer(frame_render_target, now);
-                    GuiEvent2 e2 = {0xa, &ctx, frame_render_target, fdt, {}};
-                    dispatch_event(java_natives_world_module_manager, (HEvent *)&e2);
-
-                    clear_frame(frame_render_target);
-                    (*ptr_to_pGlPopAttrib)();
-                    frame_repass_needed = again;
+    if (frame_render_target) {
+        // A hidden window (minimized, or unfocused behind another one) needs its message
+        // pump -- Display.update below still runs for that -- but the whole NanoVG pass is
+        // wasted while nothing is visible, and on slow drivers it is exactly where an
+        // occluded window turned into a multi-second freeze. Skip the painting, and ask
+        // for a full repaint on the first visible frame back.
+        if (world_is_loaded(&jvm)) {
+            if (!is_event_handled(java_natives_world_module_manager, 0xa)) {
+                render_target_width = W;
+                render_target_height = H;
+                if (resize_render_target(frame_render_target, W, H)) {
+                    frame_resize_cooldown = 0xa;
+                } else if (frame_resize_cooldown > 0) {
+                    frame_resize_cooldown = frame_resize_cooldown - 1;
                 }
+                void *gui = frame_render_target;
+                set_render_scale(gui, gui_get_scale_entry());
+                double dt = now - frame_start_time;
+                if (dt > threshold_0_00833333) {
+                    float fdt = (float)dt;
+                    GuiEvent e = {};
+                    e.type = 9;
+                    e.ctx = &ctx;
+                    e.dt = fdt;
+                    dispatch_event(java_natives_world_module_manager, (HEvent *)&e);
+                    int flags = e.flags;
+                    frame_input_flag = flags & 1;
+
+                    if (flags & 1) {
+                        if ((flags & 2) || frame_repass_needed || frame_resize_cooldown > 0) {
+                            unsigned char again = (unsigned)(flags & 2) >> 1;
+                            (*ptr_to_pGlPushAttrib)(0xffffffff);
+                            begin_frame_framebuffer(frame_render_target, now);
+                            GuiEvent2 e2 = {0xa, &ctx, frame_render_target, fdt, {}};
+                            dispatch_event(java_natives_world_module_manager, (HEvent *)&e2);
+
+                            clear_frame(frame_render_target);
+                            (*ptr_to_pGlPopAttrib)();
+                            frame_repass_needed = again;
+                        }
+                    }
+                    frame_start_time = now;
+                }
+                if (frame_input_flag) {
+                    (*ptr_to_pGlPushAttrib)(0xffffffff);
+                    begin_frame(frame_render_target, now);
+                    draw_framebuffer_texture_over_screen(frame_render_target);
+                    end_frame(frame_render_target);
+                    (*ptr_to_pGlPopAttrib)();
+                } else {
+                    frame_repass_needed = 1;
+                }
+            } else {
+                frame_repass_needed = 1;
             }
-            frame_start_time = now;
-        }
-        if (frame_input_flag) {
-            (*ptr_to_pGlPushAttrib)(0xffffffff);
-            begin_frame(frame_render_target, now);
-            draw_framebuffer_texture_over_screen(frame_render_target);
-            end_frame(frame_render_target);
-            (*ptr_to_pGlPopAttrib)();
-        } else {
-            frame_repass_needed = 1;
         }
     }
     // Called every frame, not only when something is queued: a batch that was applied on the
@@ -410,11 +462,21 @@ extern "C" void bind_profile_to_key(char *p, int key) {
 struct PktEv { int type; int padding_04; Jvm *jvm; void *pkt; long long time; int id; int result; char rest[0x20]; int tail; };
 extern "C" int on_packet(JNIEnv *env, jobject, void *pkt, unsigned char outbound, long long time, int id) {
     bool busy;
+    unsigned spins = 0;
     for (;;) {
         busy = __atomic_exchange_n(&frame_spinlock, 1, __ATOMIC_SEQ_CST) != 0;
 
         if (!busy) break;
-        __builtin_ia32_pause();
+        if (++spins < 4096) {
+            __builtin_ia32_pause();
+#ifdef _WIN32
+        } else {
+            Sleep(1);
+#else
+        } else {
+            sched_yield();
+#endif
+        }
     }
     int result = 0;
     if (!java_natives_frame_client_shutting_down_natives_check) {

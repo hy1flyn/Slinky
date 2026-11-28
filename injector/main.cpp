@@ -301,7 +301,7 @@ void download_updates_page(Tui::Screen &screen) {
     // The outcome does not need to be admired: once the loader row reads "Done" the next
     // stage starts right away. The hold only exists so the rewrite is not overwritten by
     // the page switch in the same frame -- a quarter second is enough to read it.
-    screen.HoldStage(0.25);
+    screen.HoldStage(1.2);
 }
 
 }  // namespace
