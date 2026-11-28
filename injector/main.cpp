@@ -211,7 +211,7 @@ void print_list(const std::vector<Injector::Process> &processes) {    // On Wind
     bool any_game = false;
     for (const auto &process : processes) any_game = any_game || process.is_minecraft;
     if (!any_game)
-        std::cout << "\n" << "No process has LWJGL loaded: Minecraft is not running, or it is still starting.\n";
+        std::cout << "\n" << "minecraft not found\n";
 }
 
 // ---- startup status, read from the loader ----
@@ -283,14 +283,25 @@ void report_status(Tui::Screen &screen, StartupStatus status) {
     screen.FlushPage();
 }
 
-// The DOWNLOADING UPDATES page: the whole "Client - Done" row appears at once, about a
-// second after the page opens, exactly as the reference paces it.
+// The DOWNLOADING UPDATES page: both rows appear together, and the loader row then
+// resolves in place -- it starts as "downloading metadata..." and is rewritten to "Done"
+// once the metadata step finishes, exactly like the reference, which shows what the loader
+// is doing rather than printing a second row for the outcome.
+// The rows are drawn tight (no blank line between them) because they describe one pair of
+// downloads; only the block as a whole is followed by a pause.
 void download_updates_page(Tui::Screen &screen) {
     screen.NewPage();
     screen.Section("DOWNLOADING UPDATES");
-    screen.FlashStage(1000);
-    screen.PlainDetail("Client", "Done", Tui::white());
-    screen.HoldStage(1.0);
+    screen.FlashStage(400);
+    screen.PlainDetailTight("Client", "Done", Tui::white(), true);
+    screen.PlainDetailTight("Loader", "downloading metadata...", Tui::white(), false);
+    screen.FlushPage();                 // show both rows before the loader resolves
+    screen.HoldStage(1.4);
+    screen.RewriteLastDetail("Loader", "Done", Tui::white(), false);
+    // The outcome does not need to be admired: once the loader row reads "Done" the next
+    // stage starts right away. The hold only exists so the rewrite is not overwritten by
+    // the page switch in the same frame -- a quarter second is enough to read it.
+    screen.HoldStage(0.25);
 }
 
 }  // namespace
@@ -389,28 +400,31 @@ int main(int argc, char **argv) {
     };
 
     if (!found) {
-        // The reference has two separate outcomes here: nothing found shows WAITING,
-        // while more than one candidate means the target is ambiguous and it shows an
-        // ERROR that tells the user to close the others. A name or pid was given
-        // explicitly, so the reason is reported as-is instead.
+        // The reference loader finds the game *before* the inject stage, so "no game
+        // running" ends the run right after the download stage: no INJECTING page is ever
+        // drawn for it. The error line is the reference's own wording, wrapped around the
+        // underlying error the finder produced ("minecraft not found").
         bool ambiguous = options.target.empty() && !options.pid_given && Injector::CountMinecraftCandidates() > 1;
         if (interactive) {
             screen.EnterScreen();
+            screen.NewPage();
+            screen.Section("INITIALIZING");
+            screen.FlashStage(350);
+            download_updates_page(screen);
             screen.SetFailed(true);
             screen.NewPage();
+            screen.Section("ERROR", Tui::errorRed());
             if (ambiguous) {
-                screen.Section("ERROR", Tui::errorRed());
-                screen.Emit(Tui::white(), error.c_str());
+                screen.Emit(Tui::white(), error.empty() ? "More than one Minecraft was found." : error.c_str());
                 screen.Emit(Tui::white(), "Close the other Java applications and run Slinky again.");
             } else {
-                // One line instead of the reference's two: the same fact said twice was
-                // the bulk of this page, and the heading already says it is waiting. The
-                // underlying reason is kept as a dim detail, since it is the only thing
-                // that distinguishes "not started" from "started but no LWJGL yet".
-                screen.Section("WAITING");
-                screen.Emit(Tui::white(), "Minecraft 1.8.9 is not running.");
-                if (!error.empty()) screen.Detail("Reason", error, Tui::dim());
+                // "Finding minecraft process: minecraft not found" -- the reference's own
+                // finder wraps its error this way, so the line is built from the same two
+                // pieces instead of being paraphrased.
+                std::string what = error.empty() ? std::string("minecraft not found") : error;
+                screen.Emit(Tui::white(), "Finding minecraft process: " + what);
             }
+            screen.SupportNote();
             screen.FlushPage();
             screen.WaitForDismissal();
         } else {
@@ -448,8 +462,10 @@ int main(int argc, char **argv) {
         screen.Section("INJECTING");
         screen.Emit(Tui::white(), "Injecting into Minecraft...");
         // The status line has to be readable before the work starts: injection is fast
-        // enough that the page would otherwise be replaced almost immediately.
-        screen.HoldStage(2.0);
+        // enough that the page would otherwise be replaced almost immediately. Three and a
+        // half seconds matches the reference's inject stage, which is long enough to read
+        // the line without looking like the loader hung.
+        screen.HoldStage(3.5);
     }
 
     if (!has_thread(target.pid)) {
@@ -488,8 +504,27 @@ int main(int argc, char **argv) {
             std::lock_guard<std::mutex> lock(log_mutex);
             detail = last_log;
         }
-        fail_page("ERROR", detail.empty() ? std::string("Injection failed.") : detail,
-                  Injector::EnvironmentHint());
+        // The client being mapped already is not a load failure: it is the one case where
+        // there is nothing left to do, and the reference reports it with its own line. The
+        // injector's own text ("SlinkyNative is already loaded in PID <n>.") names the DLL
+        // and the pid, which is more than the player needs here.
+        bool already = detail.find("is already loaded") != std::string::npos;
+        if (interactive) {
+            screen.EnterScreen();
+            screen.SetFailed(true);
+            screen.NewPage();
+            screen.Section("ERROR", Tui::errorRed());
+            if (already)
+                screen.Emit(Tui::white(), "Slinky is already loaded.");
+            else
+                screen.Emit(Tui::white(), detail.empty() ? std::string("Injection failed.") : detail);
+            screen.SupportNote();
+            screen.FlushPage();
+            screen.WaitForDismissal();
+        } else {
+            std::cerr << "Slinky: " << (already ? std::string("Slinky is already loaded.") : detail) << "\n";
+            if (!already) std::cerr << Injector::EnvironmentHint() << "\n";
+        }
         return 1;
     }
 
