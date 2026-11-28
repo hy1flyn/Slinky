@@ -8,8 +8,7 @@
 #include <thread>
 
 #ifdef _WIN32
-#include <conio.h>
-#include <io.h>
+#include <io.h>       // _isatty (StdoutIsTty)
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -88,7 +87,10 @@ const char *white() { return g_colour ? "\x1b[0m" : ""; }
 const char *orange() { return g_colour ? "\x1b[38;5;208m" : ""; }
 const char *green() { return g_colour ? "\x1b[1;38;5;208m" : ""; }
 const char *red() { return g_colour ? "\x1b[38;5;168m" : ""; }
-const char *errorRed() { return g_colour ? "\x1b[38;5;210m" : ""; }
+// The reference loader's ERROR heading is written with the high-intensity red SGR
+// "\x1b[91m", not a 256-colour index. "\x1b[38;5;210m" is the pale salmon pink that made
+// this heading look washed out next to it, so the sequence is now the reference's own.
+const char *errorRed() { return g_colour ? "\x1b[91m" : ""; }
 const char *yellow() { return g_colour ? "\x1b[38;5;208m" : ""; }
 
 bool EnableAnsi() {
@@ -233,11 +235,18 @@ void Screen::Detail(const std::string &label, const std::string &value, const ch
 }
 
 void Screen::PlainDetail(const char *label, const char *value, const char *colour) {
+    PlainDetailTight(label, value, colour, false);
+}
+
+// `tight` = flush against the next row instead of surrounded by a blank line. The
+// reference draws the two DOWNLOADING UPDATES rows as one block, so the blank line that
+// PlainDetail appends after every row would push "Loader" onto its own paragraph.
+void Screen::PlainDetailTight(const char *label, const char *value, const char *colour, bool tight) {
     if (!animate_) {
         std::fputs(label, stdout);
         std::fputs(" - ", stdout);
         std::fputs(value, stdout);
-        std::fputs("\n\n", stdout);
+        std::fputs(tight ? "\n" : "\n\n", stdout);
         std::fflush(stdout);
         return;
     }
@@ -246,8 +255,38 @@ void Screen::PlainDetail(const char *label, const char *value, const char *colou
     line += " - ";
     line += value;
     line += reset();
-    line += "\r\n\r\n";
+    line += tight ? "\r\n" : "\r\n\r\n";
     Write(line);
+    // Remember where this row sits so RewriteLastDetail can come back to it. A non-tight
+    // row is followed by a blank line, so its own line is two rows up.
+    last_detail_rows_ = tight ? 1 : 2;
+}
+
+// Replace the row PlainDetailTight just wrote. The cursor is on the line below it (and
+// below the blank line, when the row was not tight), so it walks back, erases, and writes
+// the new value in the same place. Nothing is appended: the block keeps its size while a
+// download changes state.
+void Screen::RewriteLastDetail(const char *label, const char *value, const char *colour, bool tight) {
+    if (!animate_) {
+        std::fputs(label, stdout);
+        std::fputs(" - ", stdout);
+        std::fputs(value, stdout);
+        std::fputs(tight ? "\n" : "\n\n", stdout);
+        std::fflush(stdout);
+        return;
+    }
+    if (last_detail_rows_ <= 0) return;
+    std::string line = "\x1b[";
+    line += std::to_string(last_detail_rows_);
+    line += "A\x1b[2K\r";      // up N rows, erase the whole line, carriage return
+    line += colour ? colour : white();
+    line += label;
+    line += " - ";
+    line += value;
+    line += reset();
+    line += tight ? "\r\n" : "\r\n\r\n";
+    Write(line);
+    last_detail_rows_ = tight ? 1 : 2;
 }
 
 void Screen::Emit(const char *colour, const std::string &value) {
@@ -346,25 +385,16 @@ void Screen::CountdownClose(int seconds, const std::string &message, bool line_a
     }
 }
 
+// The reference loader prints no dismissal prompt: an error page is shown for a moment and
+// the loader exits on its own. This used to write "Press any key to close." and then block
+// on _kbhit() until someone pressed something, which left the process (and its image file)
+// alive indefinitely when nobody did. The page is now held for a fixed beat so it can be
+// read, then the run ends.
 bool Screen::WaitForDismissal() {
-    if (!animate_ || !StdoutIsTty()) return true;
+    if (!animate_) return true;
     FlushPage();
-    std::string note = std::string(white()) + "Press any key to close." + reset() + "\r\n";
-    std::fwrite(note.data(), 1, note.size(), stdout);
-    std::fflush(stdout);
-#ifdef _WIN32
-    while (true) {
-        if (_kbhit()) {
-            _getch();
-            return true;
-        }
-        if (!GetConsoleWindow()) return true;   // the window was closed: nobody can dismiss
-        sleep_ms(50);
-    }
-#else
-    sleep_ms(100);
+    HoldStage(2.5);
     return true;
-#endif
 }
 
 }  // namespace Tui
