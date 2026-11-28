@@ -58,15 +58,6 @@ public:
     // The same row entirely in one colour, as the reference's plainDetail.
     void PlainDetail(const char *label, const char *value, const char *colour);
 
-    // PlainDetail without the blank line after it, for rows that belong to one block
-    // (the Client / Loader pair on the download page).
-    void PlainDetailTight(const char *label, const char *value, const char *colour, bool tight);
-
-    // Redraw the last row written by PlainDetailTight in place: cursor up one line, erase
-    // it, write the new value. Used when a download row's state changes while it stays on
-    // screen ("downloading metadata..." -> "done") instead of appending a second row.
-    void RewriteLastDetail(const char *label, const char *value, const char *colour, bool tight);
-
     // One message line in `colour`, followed by a blank line.
     void Emit(const char *colour, const std::string &value);
 
@@ -109,8 +100,6 @@ private:
     std::string ground_tile_;
     std::string page_buffer_;
     std::string last_page_;       // last frame written, so a redraw of nothing is skipped
-    int last_detail_rows_ = 0;    // rows between the cursor and the last PlainDetail row
-                                  // (1 = tight, 2 = followed by a blank line)
 };
 
 }  // namespace Tui

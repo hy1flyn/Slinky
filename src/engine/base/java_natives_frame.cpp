@@ -17,18 +17,12 @@ FN(void, slinky_try_pending_class_hooks, ());     // Java 9+: deferred WorldClie
 extern "C" unsigned char java_natives_frame_client_shutting_down_natives_check;
 extern "C" void hook_post_world_clear_1_7(JNIEnv *env, jclass, int key) { if (!java_natives_frame_client_shutting_down_natives_check) render_world_events(env, key, false); }
 extern "C" void hook_post_world_clear_1_8(JNIEnv *env, jclass, int key) { if (!java_natives_frame_client_shutting_down_natives_check) render_world_events(env, key, true); }
-// The rewritten instruction is Display.isActive()Z, so this MUST return a boolean: the
-// caller stores the result in `boolean flag` and branches on it (pauseOnLostFocus, the
-// pre-render guard). Returning nothing left EAX holding whatever the previous call left
-// there, so the game treated a focused window as unfocused or the reverse depending on
-// what happened to be in the register -- the window coming back from the background then
-// took a wrong branch and the frame stalled.
-extern "C" jboolean hook_is_display_active_prerender(JNIEnv *env, jclass) {
-    if (java_natives_frame_client_shutting_down_natives_check) return 0;
+extern "C" void hook_is_display_active_prerender(JNIEnv *env, jclass) {
+    if (java_natives_frame_client_shutting_down_natives_check) return;
     Jvm jvm = {java_natives_world_cached_jni_ids, env};
     tick_rotation(&jvm);
     if (ptr_to_frame_module_settings[0x14] == 1) set_local_player_max_hurt_time(&jvm);
-    return world_is_loaded(&jvm) ? 1 : 0;
+    world_is_loaded(&jvm);
 }
 
 struct Rot { float yaw, pitch; };

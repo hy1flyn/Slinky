@@ -47,9 +47,6 @@ extern "C" Rot block_in_placement_rotation;         // where to look while walki
 // Spots already placed (a 64-bit mask): bits 0..11 the walls (3 heights x 4 sides), bits 32..41 the roof.
 extern "C" void *block_in_placed_count;
 extern "C" int block_in_facing_quadrant;            // which side to start the walls on (0..3, from the yaw)
-// The facing is read on enable. Enabling on the main menu (player gone) defers it to the
-// first in-game tick instead, so the enable callback can run without a world around it.
-static unsigned char block_in_facing_pending;
 extern "C" double block_in_last_y;                  // player height last tick (moving up or down resets the mask)
 // States of the random walks that make the aim look human.
 extern "C" char block_in_rng_states[], block_in_rng_states_second[], block_in_rng_states_third[], block_in_rng_states_fourth[], block_in_rng_states_fifth[], block_in_rng_states_in_block_in_d[];
@@ -147,14 +144,6 @@ extern "C" void block_in_enable_remember_facing(EvHook *hook) {
     Ctx *ctx = hook->ctx;
     if (hook->on == 1) {
         block_in_placed_count = nullptr;
-        // Enabling on the main menu (or through a profile loaded there) used to read the
-        // rotation of a null player and crash the JNI call. Defer the reading to the first
-        // in-game tick; until then no wall has been placed, so the quadrant is unused.
-        if (ctx->player == 0 || ctx->in_game != 1) {
-            block_in_facing_pending = 1;
-            block_in_facing_quadrant = 0;
-            return;
-        }
         int quadrant = (int)libc_roundf(get_entity_rotation(ctx->jvm, ctx->player).yaw / 90.0f);
         block_in_facing_quadrant = quadrant % 4;
         return;
@@ -331,13 +320,6 @@ extern "C" void block_in_tick(Hook *hook) {
     if (ctx->in_game != 1) {
         turn_off = true;
     } else {
-        if (block_in_facing_pending) {
-            // Enabled while the world was not up yet: read the facing now, on the first
-            // in-game tick, before any wall is placed.
-            block_in_facing_pending = 0;
-            int quadrant = (int)libc_roundf(get_entity_rotation(ctx->jvm, ctx->player).yaw / 90.0f);
-            block_in_facing_quadrant = quadrant % 4;
-        }
         unsigned char on_ground = java_get_entity_on_ground(ctx->jvm, ctx->player);
         if (block_in_require_ground && !on_ground) {
             turn_off = true;

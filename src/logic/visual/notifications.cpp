@@ -185,19 +185,15 @@ static bool announced(Module *module) {
 extern "C" void notifications_module_toggled_gui(ToggleEvt *h) {
     Module *module = h->mod;
     if ((void *)module == gui_module_descriptor) {
-        // Closing the GUI used to drop every queued message on the spot. That turned
-        // "Enabled X mod" notes posted from the main menu into flashes: they vanished the
-        // moment the window closed instead of ageing out like every other note. The
-        // queue is left alone here; messages expire on their own (or immediately, when
-        // the "GUI only" setting says they should, which the tick path handles).
-        if (h->on) {
-            unsigned char expected = 0;
-            if (!__atomic_compare_exchange_n(&notifications_gui_hint_shown, &expected, 1, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
-                return;
-            }
-            Note *note = push(NOTE_INFO);
-            log_fmt(note->text, 0x65, str_press_s_to_open_gui, mouse_button_name(ptr_to_gui_module_descriptor[0x1c / 4]));
+        if (!h->on) {
+            active_notification_count = 0;
+            return;
         }
+        unsigned char expected = 0;
+        if (!__atomic_compare_exchange_n(&notifications_gui_hint_shown, &expected, 1, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+            return;
+        Note *note = push(NOTE_INFO);
+        log_fmt(note->text, 0x65, str_press_s_to_open_gui, mouse_button_name(ptr_to_gui_module_descriptor[0x1c / 4]));
         return;
     }
     if (!announced(module))
@@ -210,14 +206,6 @@ extern "C" void notifications_module_toggled_gui(ToggleEvt *h) {
 // tick: age the messages, drop expired ones, post the batched enable / disable messages
 extern "C" void notifications_tick_age_messages(TickHook *hook) {
     if (notifications_only_while_gui_open == 1 && !((unsigned char *)ptr_to_gui_module_descriptor)[0x14]) {
-        // Clearing the queue without asking for a repaint left the last boxes painted on the
-        // HUD framebuffer: nothing redraws the layer until some other module raises its own
-        // flag, so the messages stayed visible although the list they were drawn from was
-        // empty. The composited layer is what the player sees, so a clear has to request the
-        // repaint too. It is requested unconditionally: this branch only runs when the list
-        // had to be dropped, and one redundant repaint costs nothing next to a stale box.
-        if (active_notification_count || notifications_last_enabled.count || notifications_last_disabled.count)
-            hook->flags |= 3;
         active_notification_count = 0;
         notifications_last_enabled.count = 0;
         notifications_last_disabled.count = 0;
@@ -237,13 +225,11 @@ extern "C" void notifications_tick_age_messages(TickHook *hook) {
         }
     }
     unsigned long long n = active_notification_count;
-    bool dropped = false;
     while (n) {
         if (!(notification_queue[notifications_head % 10].age > threshold_5_in_notifications))
             break;
         notifications_head += 1;
         active_notification_count = --n;
-        dropped = true;
     }
     if (notifications_last_enabled.count) {
         Note *note = push(NOTE_INFO);
@@ -263,14 +249,8 @@ extern "C" void notifications_tick_age_messages(TickHook *hook) {
         notifications_last_disabled.count = 0;
         n = active_notification_count;
     }
-    if (!n) {
-        // The last message just expired and the head walked past it. The layer still shows
-        // the frame that had it, and nothing asks for another pass, so the box stayed on
-        // screen while the list behind it was empty. One repaint here clears it.
-        if (dropped)
-            hook->flags |= 3;
+    if (!n)
         return;
-    }
     unsigned f = hook->flags;
     hook->flags = f | 1;
     float dt = hook->dt;

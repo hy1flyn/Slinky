@@ -37,11 +37,6 @@ static bool conditions_met(Ctx *ctx) {
     if (timer_require_mouse_value == 1 && !vertex_pointer_current(ctx))
         return false;
     if (timer_require_falling_value == 1) {
-        // "Falling" reads the player's on-ground state and motion every frame, including
-        // on the main menu where the player is gone. Without this guard, leaving a world
-        // with the module enabled crashed the moment the player reference went null.
-        if (ctx->in_game != 1 || ctx->player == 0)
-            return false;
         if (java_get_entity_on_ground(ctx->jvm, ctx->player))
             return false;
         if (java_get_entity_motion_x(ctx->jvm, ctx->player).y >= 0.0)

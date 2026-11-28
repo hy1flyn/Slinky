@@ -267,10 +267,7 @@ bool FindMinecraft(Process &out, std::string &error) {
     }
 
     if (candidates.empty()) {
-        // The reference's own finder fails with exactly this text and the caller wraps it
-        // as "Finding minecraft process: %w". The old wording named LWJGL, which is an
-        // implementation detail the loader never mentions.
-        error = "minecraft not found";
+        error = "Minecraft is not running (no process has LWJGL loaded)";
         return false;
     }
 

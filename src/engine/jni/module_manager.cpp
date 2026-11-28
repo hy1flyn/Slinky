@@ -14,6 +14,24 @@ struct Mgr {
     Module **dis_list; unsigned long long dis_count;  // +0x2f8 pending disables
     void (*set308)(void *mod, int v);   // +0x308
 };
+// The manager lives in a fixed 784-byte block of the data image, so the deferred enable
+// batch cannot be stored inside it; it is file-local instead.
+static Module *deferred_enable[0x43];
+static unsigned long long deferred_enable_n;
+// Same for disables: a batch queued on the main menu still owes its release_owner call.
+static Module *deferred_disable[0x43];
+static unsigned long long deferred_disable_n;
+// Merge a batch into the deferred queue instead of replacing it. Loading two profiles from the
+// main menu queues two batches in consecutive frames, and the second used to overwrite the first:
+// those modules never got their toggle notification and, for disables, never gave the hotbar back.
+// Modules already queued keep their position, so a module that was enabled and then disabled again
+// before a world exists ends up with the notification that matches its final state.
+static void defer_append(Module **queue, unsigned long long *count, Module *mod) {
+    for (unsigned long long i = 0; i < *count; i++)
+        if (queue[i] == mod) return;
+    if (*count >= 0x43) return;
+    queue[(*count)++] = mod;
+}
 struct HSlot { Handler f; void *x; };
 struct Module { char padding_00[0x10]; unsigned cat; unsigned char enabled; char padding_15[0x33]; HSlot h[27]; };
 // dispatch: call every handler registered for the event's type (first dword of the event)
@@ -179,19 +197,19 @@ static inline __attribute__((always_inline)) void rebuild(Mgr *manager, unsigned
 }
 extern "C" void apply_module_toggles(HCtx *ctx) {
     Mgr *manager = ctx->module_manager;
-    // The handlers can touch the game objects: Block In's enable used to read the local
-    // player's rotation, and the start-up queue (modules with flags bit 1) is applied on
-    // the first frame, which on a fresh launch is the main menu, where
-    // Minecraft.thePlayer/theWorld are NULL. Applying it against a NULL player faulted in
-    // jni_fast_GetFloatField. The enabled flags and the handler tables are pure
-    // bookkeeping: they never touch a game object, so they are applied unconditionally.
-    // That matters on the main menu, where the HUD has to draw with no world and no
-    // player: the render lists were left empty because this function returned early, so
-    // is_event_handled() reported "nobody listens" for the 3D and 2D events and
-    // render_world_events() skipped both passes entirely.
-    // The toggle event is dispatched unconditionally as well. Its one game-reading
-    // handler (Block In) defers the rotation read to its first in-game tick, so the
-    // notifications land on the frame the toggle happened instead of after world entry.
+    // The handlers can touch the game objects: Block In's enable reads the local player's rotation, and the
+    // start-up queue (modules with flags bit 1) is applied on the first frame, which on a fresh launch is
+    // the main menu, where Minecraft.thePlayer/theWorld are NULL. Keeping the queue until the first frame
+    // that has both is what the tick path already does (tick_modules has the same check); applying it
+    // against a NULL player faulted in jni_fast_GetFloatField.
+    // The enabled flags and the handler tables are pure bookkeeping: they never touch a game
+    // object, so they are applied unconditionally. That matters on the main menu, where the
+    // HUD has to draw with no world and no player: the render lists were left empty because
+    // this function returned early, so is_event_handled() reported "nobody listens" for the
+    // 3D and 2D events and render_world_events() skipped both passes entirely.
+    // Only the toggle notifications below reach into the game (Block In's enable reads the
+    // local player's rotation), and those stay deferred until a world and a player exist.
+    bool game_ready = ctx->world && ctx->player;
     if (manager->en_count) {
         unsigned long long mask = 0;
         unsigned long long n = manager->en_count;
@@ -201,17 +219,30 @@ extern "C" void apply_module_toggles(HCtx *ctx) {
             mask |= handler_mask(mod);
         }
         rebuild(manager, mask);
-        // The toggle event is dispatched on every frame, main menu included. The only
-        // handler that used to need a world was Block In's facing read, and that one now
-        // defers the read to its first in-game tick, so holding the batch back just held
-        // the notifications back with it.
+        if (game_ready) {
+            for (unsigned long long i = 0; i < n; i++) {
+                ToggleEvent e = {5, ctx, manager->en_list[i], 1, {}};
+                Handler *h = ctx->module_manager->lists[5];
+                for (Handler f = *h; f; f = *++h) f(&e);
+            }
+            manager->en_count = 0;
+        } else {
+            // No world yet: the modules are on and their handlers are wired, but the
+            // toggle notifications have to wait (they read game objects). Remember the
+            // batch so it is announced on the first frame that has a player and a world.
+            for (unsigned long long i = 0; i < n; i++) defer_append(deferred_enable, &deferred_enable_n, manager->en_list[i]);
+            manager->en_count = 0;
+        }
+        manager = ctx->module_manager;
+    } else if (game_ready && deferred_enable_n) {
+        // A batch queued on the main menu is announced now that the game is ready.
+        unsigned long long n = deferred_enable_n;
+        deferred_enable_n = 0;
         for (unsigned long long i = 0; i < n; i++) {
-            ToggleEvent e = {5, ctx, manager->en_list[i], 1, {}};
+            ToggleEvent e = {5, ctx, deferred_enable[i], 1, {}};
             Handler *h = ctx->module_manager->lists[5];
             for (Handler f = *h; f; f = *++h) f(&e);
         }
-        manager->en_count = 0;
-        manager = ctx->module_manager;
     }
     if (manager->dis_count) {
         unsigned long long mask = 0;
@@ -229,15 +260,33 @@ extern "C" void apply_module_toggles(HCtx *ctx) {
             mask |= handler_mask(mod);
         }
         rebuild(manager, mask);
-        // Dispatched on every frame, main menu included. release_owner only clears a
-        // pointer (rotation_and_hotbar_ticks.cpp), so it is safe with no world around.
-        for (unsigned long long i = 0; i < n; i++) {
-            Module *mod = manager->dis_list[i];
-            ToggleEvent e = {5, ctx, mod, 0, {}};
-            for (unsigned k = 0; k < saved_n; k++) saved[k](&e);
-            release_owner(mod);
+        if (game_ready) {
+            for (unsigned long long i = 0; i < n; i++) {
+                Module *mod = manager->dis_list[i];
+                ToggleEvent e = {5, ctx, mod, 0, {}};
+                for (unsigned k = 0; k < saved_n; k++) saved[k](&e);
+                release_owner(mod);
+            }
+        } else {
+            // No world yet. The module is already off and out of the handler tables, but
+            // release_owner still has to run: it hands the hotbar back (rotation_and_hotbar_ticks),
+            // which the module managers take on enable. Dropping the batch here left a module
+            // switched off on the main menu still claiming ownership, so the automatic hotbar
+            // switching of everything else stalled. Remember it for the first frame with a world.
+            for (unsigned long long i = 0; i < n; i++) defer_append(deferred_disable, &deferred_disable_n, manager->dis_list[i]);
         }
         manager->dis_count = 0;
+    } else if (game_ready && deferred_disable_n) {
+        // A disable batch queued on the main menu is released now that the game is ready.
+        unsigned long long n = deferred_disable_n;
+        deferred_disable_n = 0;
+        for (unsigned long long i = 0; i < n; i++) {
+            Module *mod = deferred_disable[i];
+            ToggleEvent e = {5, ctx, mod, 0, {}};
+            Handler *h = manager->lists[5];
+            for (Handler f = *h; f; f = *++h) f(&e);
+            release_owner(mod);
+        }
     }
 }
 
